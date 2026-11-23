@@ -5,17 +5,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from aiohttp import web
+import voluptuous as vol
 
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
     BROWSER_TARGET,
     CARD_FILENAME,
     CARD_URL_BASE,
+    CONF_BLUEPRINTS_URL,
     CONF_DEFAULT_TARGET,
     CONF_LOGO_URL,
     CONF_NOTIFY_SERVICE,
@@ -23,12 +26,14 @@ from .const import (
     CONF_RSS_URL,
     CONF_SCAN_INTERVAL,
     CONF_SPOTIFY_SHOW_URL,
+    DEFAULT_BLUEPRINTS_URL,
     DEFAULT_LOGO_URL,
     DEFAULT_NOTIFY_SERVICES,
     DEFAULT_RSS_URL,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SPOTIFY_SHOW_URL,
     DOMAIN,
+    SERVICE_IMPORT_BLUEPRINT,
     VERSION,
 )
 from .coordinator import WohnsinnigVernetztCoordinator, normalize_notify_services
@@ -42,9 +47,17 @@ PLATFORMS: list[Platform] = [
     Platform.EVENT,
 ]
 
+IMPORT_BLUEPRINT_SCHEMA = vol.Schema(
+    {
+        vol.Optional("url"): str,
+        vol.Optional("blueprint_id"): str,
+        vol.Optional("import_all", default=False): bool,
+    }
+)
+
 
 class WohnsinnigVernetztEpisodesView(HomeAssistantView):
-    """Liefert alle Podcast-Episoden und Player-Infos als JSON an die Karte."""
+    """Liefert Podcast-Episoden, Blueprints und Player-Infos als JSON an die Karte."""
 
     url = f"/api/{DOMAIN}/episodes"
     name = f"api:{DOMAIN}:episodes"
@@ -63,6 +76,7 @@ class WohnsinnigVernetztEpisodesView(HomeAssistantView):
                     "title": "Wohnsinnig vernetzt",
                     "image": DEFAULT_LOGO_URL,
                     "episodes": [],
+                    "blueprints": [],
                     "spotify_show_id": "",
                     "spotify_show_url": "",
                     "target_entity": BROWSER_TARGET,
@@ -110,6 +124,53 @@ class WohnsinnigVernetztPlayerStateView(HomeAssistantView):
         return self.json({"status": "ok"})
 
 
+class WohnsinnigVernetztImportBlueprintView(HomeAssistantView):
+    """Importiert einen oder alle Blueprints direkt in den HA-Blueprints-Ordner."""
+
+    url = f"/api/{DOMAIN}/import_blueprint"
+    name = f"api:{DOMAIN}:import_blueprint"
+    requires_auth = True
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        domain_data = hass.data.get(DOMAIN, {})
+        coordinator: WohnsinnigVernetztCoordinator | None = domain_data.get(
+            "coordinator"
+        )
+        if coordinator is None:
+            return self.json({"error": "Integration nicht geladen."}, status_code=503)
+
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+
+        try:
+            if payload.get("import_all"):
+                imported = await coordinator.async_import_all_blueprints()
+                return self.json(
+                    {
+                        "status": "ok",
+                        "imported": imported,
+                        "blueprints": coordinator.get_blueprints(),
+                    }
+                )
+
+            result = await coordinator.async_import_blueprint(
+                url=payload.get("url"),
+                blueprint_id=payload.get("blueprint_id"),
+            )
+            return self.json(
+                {
+                    "status": "ok",
+                    "imported": [result],
+                    "blueprints": coordinator.get_blueprints(),
+                }
+            )
+        except HomeAssistantError as err:
+            return self.json({"error": str(err)}, status_code=400)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Richtet Wohnsinnig vernetzt über einen Config Entry ein."""
     domain_data = hass.data.setdefault(DOMAIN, {})
@@ -122,6 +183,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         add_extra_js_url(hass, f"{CARD_URL_BASE}/{CARD_FILENAME}?v={VERSION}")
         hass.http.register_view(WohnsinnigVernetztEpisodesView())
         hass.http.register_view(WohnsinnigVernetztPlayerStateView())
+        hass.http.register_view(WohnsinnigVernetztImportBlueprintView())
         domain_data["frontend_registered"] = True
 
     config = {**entry.data, **entry.options}
@@ -141,12 +203,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         spotify_show_url=config.get(
             CONF_SPOTIFY_SHOW_URL, DEFAULT_SPOTIFY_SHOW_URL
         ),
+        blueprints_url=config.get(CONF_BLUEPRINTS_URL) or DEFAULT_BLUEPRINTS_URL,
         default_target=config.get(CONF_DEFAULT_TARGET, BROWSER_TARGET),
     )
 
     await coordinator.async_config_entry_first_refresh()
     domain_data["coordinator"] = coordinator
     domain_data[entry.entry_id] = coordinator
+
+    if not hass.services.has_service(DOMAIN, SERVICE_IMPORT_BLUEPRINT):
+        async def _handle_import_blueprint(call: ServiceCall) -> None:
+            coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
+                DOMAIN, {}
+            ).get("coordinator")
+            if coord is None:
+                raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
+            if call.data.get("import_all"):
+                await coord.async_import_all_blueprints()
+                return
+            await coord.async_import_blueprint(
+                url=call.data.get("url"),
+                blueprint_id=call.data.get("blueprint_id"),
+            )
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_IMPORT_BLUEPRINT,
+            _handle_import_blueprint,
+            schema=IMPORT_BLUEPRINT_SCHEMA,
+        )
 
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -165,4 +250,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         domain_data = hass.data.get(DOMAIN, {})
         domain_data.pop(entry.entry_id, None)
         domain_data.pop("coordinator", None)
+        if hass.services.has_service(DOMAIN, SERVICE_IMPORT_BLUEPRINT):
+            hass.services.async_remove(DOMAIN, SERVICE_IMPORT_BLUEPRINT)
     return unload_ok

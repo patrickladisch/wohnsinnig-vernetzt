@@ -1,4 +1,4 @@
-"""Button-Entitäten für Test-Benachrichtigung und Feed-Refresh."""
+"""Button-Entitäten für Benachrichtigungstest, Refresh und Blueprint-Import."""
 
 from __future__ import annotations
 
@@ -21,10 +21,42 @@ async def async_setup_entry(
     coordinator: WohnsinnigVernetztCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
+            WohnsinnigVernetztImportBlueprintButton(coordinator, entry.entry_id),
+            WohnsinnigVernetztImportAllBlueprintsButton(coordinator, entry.entry_id),
             WohnsinnigVernetztTestNotifyButton(coordinator, entry.entry_id),
             WohnsinnigVernetztRefreshButton(coordinator, entry.entry_id),
         ]
     )
+
+
+class WohnsinnigVernetztImportBlueprintButton(WohnsinnigVernetztEntity, ButtonEntity):
+    """Importiert den ausgewählten Blueprint direkt in Home Assistant."""
+
+    _attr_name = "Ausgewählten Blueprint importieren"
+    _attr_icon = "mdi:import"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "import_selected_blueprint")
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_import_blueprint()
+
+
+class WohnsinnigVernetztImportAllBlueprintsButton(WohnsinnigVernetztEntity, ButtonEntity):
+    """Importiert alle Blueprints von wohnsinnigvernetzt.de in einem Rutsch."""
+
+    _attr_name = "Alle Blueprints importieren"
+    _attr_icon = "mdi:download-multiple"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "import_all_blueprints")
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_import_all_blueprints()
 
 
 class WohnsinnigVernetztTestNotifyButton(WohnsinnigVernetztEntity, ButtonEntity):
@@ -43,9 +75,9 @@ class WohnsinnigVernetztTestNotifyButton(WohnsinnigVernetztEntity, ButtonEntity)
 
 
 class WohnsinnigVernetztRefreshButton(WohnsinnigVernetztEntity, ButtonEntity):
-    """Aktualisiert den RSS-Feed sofort."""
+    """Aktualisiert Podcast-Feed und Blueprint-Liste sofort."""
 
-    _attr_name = "Nach neuen Folgen suchen"
+    _attr_name = "Folgen & Blueprints aktualisieren"
     _attr_icon = "mdi:refresh"
 
     def __init__(

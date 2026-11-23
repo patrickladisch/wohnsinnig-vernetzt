@@ -17,12 +17,13 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Erstellt die Podcast-Sensoren."""
+    """Erstellt die Podcast- und Blueprint-Sensoren."""
     coordinator: WohnsinnigVernetztCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
             WohnsinnigVernetztLatestSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztEpisodesSensor(coordinator, entry.entry_id),
+            WohnsinnigVernetztBlueprintsSensor(coordinator, entry.entry_id),
         ]
     )
 
@@ -101,4 +102,40 @@ class WohnsinnigVernetztEpisodesSensor(WohnsinnigVernetztEntity, SensorEntity):
         return {
             "total_episodes": len(episodes),
             "episodes": compact,
+        }
+
+
+class WohnsinnigVernetztBlueprintsSensor(WohnsinnigVernetztEntity, SensorEntity):
+    """Zeigt alle verfügbaren Blueprints von wohnsinnigvernetzt.de inkl. Import-Status."""
+
+    _attr_name = "Blueprints"
+    _attr_icon = "mdi:file-code-outline"
+    _attr_native_unit_of_measurement = "Blueprints"
+    _unrecorded_attributes = frozenset({"blueprints"})
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "blueprints_catalog")
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.get_blueprints())
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        bps = self.coordinator.get_blueprints()
+        return {
+            "source_url": self.coordinator.blueprints_url,
+            "installed_count": sum(1 for bp in bps if bp.get("installed")),
+            "blueprints": [
+                {
+                    "title": bp["title"],
+                    "description": bp.get("description", ""),
+                    "url": bp["url"],
+                    "installed": bp.get("installed", False),
+                    "installed_path": bp.get("installed_path", ""),
+                }
+                for bp in bps
+            ],
         }

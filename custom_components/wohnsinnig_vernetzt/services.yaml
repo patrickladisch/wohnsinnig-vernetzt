@@ -1,25 +1,17 @@
-send_feedback:
-  name: Feedback senden
-  description: Sendet eine Feedback-Nachricht oder einen Themenwunsch an Wohnsinnig vernetzt.
+import_blueprint:
+  name: Blueprint importieren
+  description: Importiert einen oder alle Blueprints von wohnsinnigvernetzt.de direkt in Home Assistant.
   fields:
-    message:
-      name: Nachricht
-      description: Dein Feedback oder Themenwunsch für den Podcast.
-      required: true
-      example: "Tolle Folge zu Automationen! Macht gerne mal was zu WLED."
-      selector:
-        text:
-          multiline: true
-    sender:
-      name: Name (optional)
-      description: Dein Name oder Spitzname.
-      required: false
-      example: "Max"
-      selector:
-        text:
-    episode:
-      name: Folge (optional)
-      description: Titel der Folge, auf die sich das Feedback bezieht.
+    url:
+      name: Blueprint-URL (optional)
+      description: Direkte YAML-URL. Leer lassen, um den ausgewählten Blueprint zu importieren.
       required: false
       selector:
         text:
+    import_all:
+      name: Alle Blueprints importieren
+      description: Aktivieren, um alle gefundenen Blueprints auf einmal zu importieren.
+      required: false
+      default: false
+      selector:
+        boolean:

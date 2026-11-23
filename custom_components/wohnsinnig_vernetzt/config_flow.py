@@ -9,12 +9,14 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_BLUEPRINTS_URL,
     CONF_LOGO_URL,
     CONF_NOTIFY_SERVICE,
     CONF_NOTIFY_SERVICES,
     CONF_RSS_URL,
     CONF_SCAN_INTERVAL,
     CONF_SPOTIFY_SHOW_URL,
+    DEFAULT_BLUEPRINTS_URL,
     DEFAULT_LOGO_URL,
     DEFAULT_NOTIFY_SERVICES,
     DEFAULT_RSS_URL,
@@ -53,6 +55,10 @@ def _build_schema(hass: HomeAssistant, defaults: dict) -> vol.Schema:
         {
             vol.Required(
                 CONF_RSS_URL, default=defaults.get(CONF_RSS_URL, DEFAULT_RSS_URL)
+            ): str,
+            vol.Optional(
+                CONF_BLUEPRINTS_URL,
+                default=defaults.get(CONF_BLUEPRINTS_URL) or DEFAULT_BLUEPRINTS_URL,
             ): str,
             vol.Optional(
                 CONF_NOTIFY_SERVICES,

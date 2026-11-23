@@ -1,4 +1,4 @@
-"""Select-Entitäten für Episodenwahl (mit Direktstart) und Wiedergabe-Gerät."""
+"""Select-Entitäten für Episodenwahl, Wiedergabe-Gerät und Blueprint-Auswahl."""
 
 from __future__ import annotations
 
@@ -18,12 +18,13 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Erstellt die Auswahlmenüs für Folgen und Wiedergabe-Gerät."""
+    """Erstellt die Auswahlmenüs für Folgen, Wiedergabe-Gerät und Blueprints."""
     coordinator: WohnsinnigVernetztCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
             WohnsinnigVernetztEpisodeSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztTargetSelect(coordinator, entry.entry_id),
+            WohnsinnigVernetztBlueprintSelect(coordinator, entry.entry_id),
         ]
     )
 
@@ -115,3 +116,60 @@ class WohnsinnigVernetztTargetSelect(WohnsinnigVernetztEntity, SelectEntity):
         targets = get_available_targets(self.hass)
         target_id = targets.get(option, BROWSER_TARGET)
         await self.coordinator.async_set_target_entity(target_id)
+
+
+class WohnsinnigVernetztBlueprintSelect(WohnsinnigVernetztEntity, SelectEntity):
+    """Dropdown mit allen Blueprints von wohnsinnigvernetzt.de."""
+
+    _attr_name = "Blueprint auswählen"
+    _attr_icon = "mdi:file-download-outline"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "blueprint_select")
+
+    def _option_map(self) -> dict[str, dict]:
+        blueprints = self.coordinator.get_blueprints()
+        mapping: dict[str, dict] = {}
+        for bp in blueprints:
+            prefix = "✓ " if bp.get("installed") else ""
+            candidate = f"{prefix}{bp['title']}"[:255]
+            if candidate in mapping:
+                candidate = f"{candidate[:248]} #{len(mapping) + 1}"
+            mapping[candidate] = bp
+        return mapping
+
+    @property
+    def options(self) -> list[str]:
+        opts = list(self._option_map().keys())
+        return opts or ["Keine Blueprints gefunden"]
+
+    @property
+    def current_option(self) -> str | None:
+        mapping = self._option_map()
+        if not mapping:
+            return "Keine Blueprints gefunden"
+        selected = self.coordinator.get_selected_blueprint()
+        if selected:
+            for label, bp in mapping.items():
+                if bp["id"] == selected["id"]:
+                    return label
+        return next(iter(mapping.keys()))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        bp = self.coordinator.get_selected_blueprint() or {}
+        return {
+            "title": bp.get("title", ""),
+            "description": bp.get("description", ""),
+            "url": bp.get("url", ""),
+            "installed": bp.get("installed", False),
+            "installed_path": bp.get("installed_path", ""),
+        }
+
+    async def async_select_option(self, option: str) -> None:
+        mapping = self._option_map()
+        bp = mapping.get(option)
+        if bp:
+            await self.coordinator.async_set_selected_blueprint(bp["id"])

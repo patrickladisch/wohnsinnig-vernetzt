@@ -3,9 +3,10 @@
     "step": {
       "user": {
         "title": "Wohnsinnig vernetzt einrichten",
-        "description": "RSS-Feed, Benachrichtigungen und optional eure Spotify-Show-URL konfigurieren.",
+        "description": "RSS-Feed, Blueprints-Quelle, Benachrichtigungen und optional eure Spotify-Show-URL konfigurieren.",
         "data": {
           "rss_url": "Podcast RSS-URL",
+          "blueprints_url": "Blueprints-Seiten-URL",
           "notify_services": "Benachrichtigungsdienste bei neuen Folgen",
           "scan_interval": "Abrufintervall (Minuten)",
           "spotify_show_url": "Spotify-Show-URL (optional, für den offiziellen Spotify-Embed-Player)",
@@ -23,6 +24,7 @@
         "title": "Wohnsinnig vernetzt Optionen",
         "data": {
           "rss_url": "Podcast RSS-URL",
+          "blueprints_url": "Blueprints-Seiten-URL",
           "notify_services": "Benachrichtigungsdienste bei neuen Folgen",
           "scan_interval": "Abrufintervall (Minuten)",
           "spotify_show_url": "Spotify-Show-URL (optional, für Spotify-Embed-Player)",

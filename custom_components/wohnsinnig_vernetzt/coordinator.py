@@ -1,4 +1,4 @@
-"""DataUpdateCoordinator für RSS-Feed, Wiedergabe und Benachrichtigungen."""
+"""DataUpdateCoordinator für RSS-Feed, Blueprints, Wiedergabe und Benachrichtigungen."""
 
 from __future__ import annotations
 
@@ -12,14 +12,25 @@ import xml.etree.ElementTree as ET
 import aiohttp
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .blueprints import (
+    annotate_installed_status,
+    build_safe_filename,
+    normalize_blueprint_url,
+    parse_blueprints_catalog,
+    validate_blueprint_yaml,
+    write_blueprint_file,
+)
 from .const import (
     BROWSER_TARGET,
+    DEFAULT_BLUEPRINTS_URL,
     DOMAIN,
+    EVENT_BLUEPRINT_IMPORTED,
     EVENT_NEW_EPISODE,
     SIGNAL_NEW_EPISODE,
     STORAGE_KEY,
@@ -178,7 +189,7 @@ def _parse_rss(xml_text: str, override_logo_url: str = "") -> dict:
 
 
 class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
-    """Verwaltet RSS-Feed, Benachrichtigungen und Media-Player-Wiedergabe."""
+    """Verwaltet RSS-Feed, Blueprints, Benachrichtigungen und Media-Player-Wiedergabe."""
 
     def __init__(
         self,
@@ -188,6 +199,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         scan_interval_minutes: int,
         logo_url: str = "",
         spotify_show_url: str = "",
+        blueprints_url: str = DEFAULT_BLUEPRINTS_URL,
         default_target: str = BROWSER_TARGET,
     ) -> None:
         super().__init__(
@@ -197,6 +209,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             update_interval=timedelta(minutes=scan_interval_minutes),
         )
         self.rss_url = rss_url
+        self.blueprints_url = (blueprints_url or DEFAULT_BLUEPRINTS_URL).strip()
         self.logo_url = logo_url.strip()
         self.spotify_show_url = spotify_show_url.strip()
         self.spotify_show_id = extract_spotify_show_id(self.spotify_show_url)
@@ -206,6 +219,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self._seen_guids: set[str] | None = None
         self.notifications_enabled: bool = True
         self.selected_episode_guid: str | None = None
+        self.selected_blueprint_id: str | None = None
         self.target_entity: str = default_target or BROWSER_TARGET
         self.playback_state: str = "idle"
         self.play_command_id: int = 0
@@ -223,6 +237,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 self.notifications_enabled = stored["notifications_enabled"]
             if isinstance(stored.get("selected_episode_guid"), str):
                 self.selected_episode_guid = stored["selected_episode_guid"]
+            if isinstance(stored.get("selected_blueprint_id"), str):
+                self.selected_blueprint_id = stored["selected_blueprint_id"]
             if isinstance(stored.get("target_entity"), str) and stored["target_entity"]:
                 self.target_entity = stored["target_entity"]
         self._state_loaded = True
@@ -233,6 +249,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "guids": list(self._seen_guids or []),
                 "notifications_enabled": self.notifications_enabled,
                 "selected_episode_guid": self.selected_episode_guid,
+                "selected_blueprint_id": self.selected_blueprint_id,
                 "target_entity": self.target_entity,
             }
         )
@@ -249,9 +266,30 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         await self._async_save_state()
         self.async_update_listeners()
 
+    async def async_set_selected_blueprint(self, bp_id: str) -> None:
+        """Speichert den im Dropdown gewählten Blueprint."""
+        self.selected_blueprint_id = bp_id
+        await self._async_save_state()
+        self.async_update_listeners()
+
     def get_episodes(self) -> list[dict]:
         """Liefert alle geladenen Episoden."""
         return (self.data or {}).get("episodes", [])
+
+    def get_blueprints(self) -> list[dict]:
+        """Liefert alle geladenen Blueprints von wohnsinnigvernetzt.de."""
+        return (self.data or {}).get("blueprints", [])
+
+    def get_selected_blueprint(self) -> dict | None:
+        """Gibt den im Dropdown gewählten Blueprint zurück."""
+        blueprints = self.get_blueprints()
+        if not blueprints:
+            return None
+        if self.selected_blueprint_id:
+            for bp in blueprints:
+                if bp["id"] == self.selected_blueprint_id:
+                    return bp
+        return blueprints[0]
 
     def get_selected_episode(self) -> dict | None:
         """Gibt die aktuell ausgewählte Episode (oder die neueste) zurück."""
@@ -274,6 +312,159 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 if ep["guid"] == self.selected_episode_guid:
                     return idx
         return 0
+
+    async def _async_fetch_blueprints(self, session: aiohttp.ClientSession) -> list[dict]:
+        """Lädt die Website und extrahiert alle verlinkten Blueprints."""
+        if not self.blueprints_url:
+            return []
+        try:
+            async with session.get(
+                self.blueprints_url,
+                timeout=aiohttp.ClientTimeout(total=20),
+                headers={"User-Agent": "HomeAssistant-WohnsinnigVernetzt/1.3"},
+            ) as response:
+                response.raise_for_status()
+                raw_text = await response.text()
+                final_url = str(response.url)
+        except (aiohttp.ClientError, TimeoutError) as err:
+            _LOGGER.warning(
+                "Blueprints konnten nicht von %s geladen werden: %s",
+                self.blueprints_url,
+                err,
+            )
+            return (self.data or {}).get("blueprints", [])
+
+        try:
+            parsed = await self.hass.async_add_executor_job(
+                parse_blueprints_catalog, raw_text, final_url
+            )
+            return await self.hass.async_add_executor_job(
+                annotate_installed_status, parsed, self.hass.config.config_dir
+            )
+        except Exception as err:
+            _LOGGER.warning("Fehler beim Parsen der Blueprints: %s", err)
+            return (self.data or {}).get("blueprints", [])
+
+    def _reset_ha_blueprint_cache(self, bp_domain: str) -> None:
+        """Leert den internen HA-Blueprint-Cache, damit neue Dateien sofort sichtbar sind."""
+        try:
+            bp_data = self.hass.data.get("blueprint")
+            if isinstance(bp_data, dict):
+                domain_bps = bp_data.get(bp_domain)
+                if domain_bps is not None and hasattr(domain_bps, "async_reset_cache"):
+                    domain_bps.async_reset_cache()
+        except Exception as err:
+            _LOGGER.debug("Blueprint-Cache-Reset übersprungen: %s", err)
+
+    async def async_import_blueprint(
+        self, url: str | None = None, blueprint_id: str | None = None
+    ) -> dict:
+        """Lädt eine Blueprint-YAML herunter, validiert sie und speichert sie direkt in HA."""
+        target_bp = None
+        if blueprint_id:
+            for bp in self.get_blueprints():
+                if bp["id"] == blueprint_id or bp["filename"] == blueprint_id:
+                    target_bp = bp
+                    break
+        elif url:
+            norm_check = normalize_blueprint_url(url, self.blueprints_url)
+            for bp in self.get_blueprints():
+                if bp["url"] == norm_check or bp["url"] == url:
+                    target_bp = bp
+                    break
+        else:
+            target_bp = self.get_selected_blueprint()
+
+        raw_url = url or (target_bp["url"] if target_bp else "")
+        resolved_url = normalize_blueprint_url(raw_url, self.blueprints_url)
+        if not resolved_url:
+            raise HomeAssistantError("Keine gültige Blueprint-URL angegeben.")
+
+        session = async_get_clientsession(self.hass)
+        try:
+            async with session.get(
+                resolved_url,
+                timeout=aiohttp.ClientTimeout(total=20),
+                headers={"User-Agent": "HomeAssistant-WohnsinnigVernetzt/1.3"},
+            ) as response:
+                response.raise_for_status()
+                yaml_text = await response.text()
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise HomeAssistantError(
+                f"Blueprint konnte nicht heruntergeladen werden: {err}"
+            ) from err
+
+        try:
+            bp_domain, bp_name = await self.hass.async_add_executor_job(
+                validate_blueprint_yaml, yaml_text
+            )
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+
+        filename = (
+            target_bp["filename"]
+            if target_bp
+            else build_safe_filename(resolved_url, bp_name or "")
+        )
+
+        rel_path = await self.hass.async_add_executor_job(
+            write_blueprint_file,
+            self.hass.config.config_dir,
+            bp_domain,
+            filename,
+            yaml_text,
+        )
+
+        self._reset_ha_blueprint_cache(bp_domain)
+
+        if self.data and "blueprints" in self.data:
+            self.data["blueprints"] = await self.hass.async_add_executor_job(
+                annotate_installed_status,
+                self.data["blueprints"],
+                self.hass.config.config_dir,
+            )
+
+        result = {
+            "title": (target_bp["title"] if target_bp else None) or bp_name or filename,
+            "filename": filename,
+            "domain": bp_domain,
+            "path": rel_path,
+            "url": resolved_url,
+        }
+
+        self.hass.bus.async_fire(EVENT_BLUEPRINT_IMPORTED, result)
+        self.async_update_listeners()
+        return result
+
+    async def async_import_all_blueprints(self) -> list[dict]:
+        """Importiert alle Blueprints von wohnsinnigvernetzt.de auf einmal."""
+        blueprints = self.get_blueprints()
+        if not blueprints:
+            raise HomeAssistantError(
+                "Aktuell wurden keine Blueprints auf der Webseite gefunden."
+            )
+
+        imported: list[dict] = []
+        errors: list[str] = []
+        for bp in blueprints:
+            try:
+                res = await self.async_import_blueprint(
+                    url=bp["url"], blueprint_id=bp["id"]
+                )
+                imported.append(res)
+            except HomeAssistantError as err:
+                errors.append(f"{bp['title']}: {err}")
+
+        if errors and not imported:
+            raise HomeAssistantError("; ".join(errors))
+
+        if errors:
+            _LOGGER.warning(
+                "Einige Blueprints konnten nicht importiert werden: %s",
+                "; ".join(errors),
+            )
+
+        return imported
 
     async def async_play_episode(
         self, guid: str | None = None, from_browser: bool = False
@@ -395,9 +586,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "media_player", "play_media", service_data, blocking=False
             )
         except Exception as err:
-            _LOGGER.warning(
-                "Wiedergabe auf %s fehlgeschlagen: %s", target, err
-            )
+            _LOGGER.warning("Wiedergabe auf %s fehlgeschlagen: %s", target, err)
 
     async def _async_call_target_service(self, service: str) -> None:
         target = self.target_entity
@@ -416,7 +605,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             )
 
     async def _async_update_data(self) -> dict:
-        """Lädt den RSS-Feed und prüft auf neue Episoden."""
+        """Lädt RSS-Feed und Blueprints und prüft auf neue Episoden."""
         await self._async_load_state()
         session = async_get_clientsession(self.hass)
         try:
@@ -437,8 +626,14 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 f"RSS-Feed konnte nicht verarbeitet werden: {err}"
             ) from err
 
+        blueprints = await self._async_fetch_blueprints(session)
+        data["blueprints"] = blueprints
+
         if data["episodes"] and not self.selected_episode_guid:
             self.selected_episode_guid = data["episodes"][0]["guid"]
+
+        if blueprints and not self.selected_blueprint_id:
+            self.selected_blueprint_id = blueprints[0]["id"]
 
         await self._handle_new_episodes(data["episodes"])
         return data
