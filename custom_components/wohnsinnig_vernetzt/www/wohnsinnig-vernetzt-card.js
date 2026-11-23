@@ -1,3 +1,4 @@
+// Wohnsinnig vernetzt Dashboard Card v1.3.2 (ohne Feedback)
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
     super();

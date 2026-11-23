@@ -1,7 +1,7 @@
 """Konstanten für Wohnsinnig vernetzt."""
 
 DOMAIN = "wohnsinnig_vernetzt"
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 
 DEFAULT_RSS_URL = "https://anchor.fm/s/111a8abd0/podcast/rss"
 DEFAULT_BLUEPRINTS_URL = "https://www.wohnsinnigvernetzt.de/"

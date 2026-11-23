@@ -13,7 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import (
     BROWSER_TARGET,
@@ -191,9 +191,27 @@ def _cleanup_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
             ent_reg.async_remove(reg_entry.entity_id)
 
 
+def _sync_device_info(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Aktualisiert bestehende Geräte-Informationen direkt in der Device-Registry."""
+    dev_reg = dr.async_get(hass)
+    device = dev_reg.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    if device is not None:
+        try:
+            dev_reg.async_update_device(
+                device.id,
+                name="Wohnsinnig vernetzt",
+                model="Podcast: Wohnsinnig vernetzt",
+                manufacturer="www.wohnsinnigvernetzt.de",
+                configuration_url="https://www.wohnsinnigvernetzt.de",
+            )
+        except TypeError:
+            pass
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Richtet Wohnsinnig vernetzt über einen Config Entry ein."""
     _cleanup_legacy_entities(hass, entry)
+    _sync_device_info(hass, entry)
     domain_data = hass.data.setdefault(DOMAIN, {})
 
     if not domain_data.get("frontend_registered"):

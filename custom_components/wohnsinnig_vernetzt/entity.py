@@ -26,7 +26,7 @@ class WohnsinnigVernetztEntity(CoordinatorEntity[WohnsinnigVernetztCoordinator])
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry_id)},
             name="Wohnsinnig vernetzt",
-            manufacturer="Wohnsinnig vernetzt Podcast",
-            model="Podcast RSS Feed",
+            model="Podcast: Wohnsinnig vernetzt",
+            manufacturer="www.wohnsinnigvernetzt.de",
             configuration_url="https://www.wohnsinnigvernetzt.de",
         )
