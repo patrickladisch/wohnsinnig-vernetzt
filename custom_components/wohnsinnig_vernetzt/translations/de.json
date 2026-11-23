@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Wohnsinnig vernetzt einrichten",
+        "description": "RSS-Feed und Benachrichtigungen für neue Podcast-Folgen konfigurieren.",
+        "data": {
+          "rss_url": "Podcast RSS-URL",
+          "notify_service": "Benachrichtigungsdienst (z. B. notify.mobile_app_handy oder persistent_notification.create)",
+          "scan_interval": "Abrufintervall (Minuten)"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Wohnsinnig vernetzt ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Wohnsinnig vernetzt Optionen",
+        "data": {
+          "rss_url": "Podcast RSS-URL",
+          "notify_service": "Benachrichtigungsdienst",
+          "scan_interval": "Abrufintervall (Minuten)"
+        }
+      }
+    }
+  }
+}
