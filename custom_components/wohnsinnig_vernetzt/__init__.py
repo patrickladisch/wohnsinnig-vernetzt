@@ -13,6 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     BROWSER_TARGET,
@@ -171,8 +172,28 @@ class WohnsinnigVernetztImportBlueprintView(HomeAssistantView):
             return self.json({"error": str(err)}, status_code=400)
 
 
+LEGACY_ENTITY_UNIQUE_ID_SUFFIXES = (
+    "_send_feedback",
+    "_feedback_message",
+)
+
+
+def _cleanup_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Entfernt veraltete Feedback-Entitäten dauerhaft aus der HA-Entity-Registry."""
+    ent_reg = er.async_get(hass)
+    for reg_entry in list(er.async_entries_for_config_entry(ent_reg, entry.entry_id)):
+        uid = reg_entry.unique_id or ""
+        if (
+            any(uid.endswith(suffix) for suffix in LEGACY_ENTITY_UNIQUE_ID_SUFFIXES)
+            or "feedback" in uid.lower()
+            or "feedback" in reg_entry.entity_id.lower()
+        ):
+            ent_reg.async_remove(reg_entry.entity_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Richtet Wohnsinnig vernetzt über einen Config Entry ein."""
+    _cleanup_legacy_entities(hass, entry)
     domain_data = hass.data.setdefault(DOMAIN, {})
 
     if not domain_data.get("frontend_registered"):

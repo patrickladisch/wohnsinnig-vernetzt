@@ -3,20 +3,53 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import html as html_lib
 from html.parser import HTMLParser
 import json
 from pathlib import Path
 import re
-from urllib.parse import parse_qs, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse, urlunparse
 
 import yaml
 
 from .const import ALLOWED_BLUEPRINT_DOMAINS, BLUEPRINT_SUBDIR
 
-_YAML_URL_RE = re.compile(
-    r"""(?:https?://[^\s"'<>()]+|(?:\./|/|[a-zA-Z0-9_-]+/)[^\s"'<>()]+)\.ya?ml(?:\?[^\s"'<>()]*)?""",
+HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/128.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+}
+
+# Erkennt vollständige URLs und relative Pfad-URLs auf .yaml / .yml (auch mit Leerzeichen in Quotes)
+_QUOTED_YAML_URL_RE = re.compile(
+    r"""(?P<q>["'`])(?P<url>(?:https?://|(?:\.\.?/|/|[a-zA-Z0-9_-]+/))[^"'`<>\n\r]+?\.ya?ml(?:\?[^"'`<>\n\r]*)?)(?P=q)""",
     re.IGNORECASE,
 )
+_BARE_YAML_URL_RE = re.compile(
+    r"""(?:https?://[^\s"'`<>()\\]+|(?:\.\.?/|/|[a-zA-Z0-9_-]+/)[^\s"'`<>()\\]+)\.ya?ml(?:\?[^\s"'`<>()\\]*)?""",
+    re.IGNORECASE,
+)
+_MY_HA_RE = re.compile(
+    r"""https?://my\.home-assistant\.io/redirect/blueprint_import/\?[^\s"'`<>()]+""",
+    re.IGNORECASE,
+)
+
+_IGNORED_YAML_FILENAMES = {
+    "configuration.yaml",
+    "secrets.yaml",
+    "automations.yaml",
+    "scripts.yaml",
+    "scenes.yaml",
+    "customize.yaml",
+    "groups.yaml",
+    "ui-lovelace.yaml",
+    "docker-compose.yaml",
+    "compose.yaml",
+}
 
 _GENERIC_LINK_TEXTS = {
     "yaml-datei im browser öffnen",
@@ -30,6 +63,18 @@ _GENERIC_LINK_TEXTS = {
     "link kopieren",
     "öffnen",
 }
+
+_CDN_HOSTS = (
+    "cdn.tailwindcss.com",
+    "unpkg.com",
+    "cdn.jsdelivr.net",
+    "cdnjs.cloudflare.com",
+    "fonts.googleapis.com",
+    "ajax.googleapis.com",
+    "code.jquery.com",
+    "kit.fontawesome.com",
+    "open.spotify.com",
+)
 
 _VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input",
@@ -54,15 +99,22 @@ def _ignore_ha_tag(loader: yaml.SafeLoader, suffix: str, node: yaml.Node):
 _BlueprintSafeLoader.add_multi_constructor("!", _ignore_ha_tag)
 
 
+def _is_ignored_filename(url: str) -> bool:
+    parsed = urlparse(url)
+    name = Path(unquote(parsed.path)).name.lower()
+    return name in _IGNORED_YAML_FILENAMES
+
+
 def normalize_blueprint_url(raw_url: str, base_url: str) -> str:
     """Löst relative Pfade, My-HA-Redirects und GitHub-Blob-URLs zu direkten YAML-URLs auf."""
-    url = raw_url.strip().strip("'\"")
+    url = html_lib.unescape(raw_url).replace("\\/", "/").strip().strip("'\"`")
     if not url:
         return ""
 
     resolved = urljoin(base_url, url)
     parsed = urlparse(resolved)
 
+    # My Home Assistant Redirect entpacken
     if parsed.netloc.lower() == "my.home-assistant.io":
         qs = parse_qs(parsed.query)
         inner = qs.get("blueprint_url")
@@ -70,6 +122,7 @@ def normalize_blueprint_url(raw_url: str, base_url: str) -> str:
             resolved = inner[0].strip()
             parsed = urlparse(resolved)
 
+    # GitHub blob -> raw.githubusercontent.com
     if parsed.netloc.lower() == "github.com" and "/blob/" in parsed.path:
         parts = parsed.path.strip("/").split("/")
         if len(parts) >= 5 and parts[2] == "blob":
@@ -79,6 +132,14 @@ def normalize_blueprint_url(raw_url: str, base_url: str) -> str:
             parsed = urlparse(resolved)
 
     if parsed.scheme not in ("http", "https"):
+        return ""
+
+    # Eventuelle Leerzeichen oder Sonderzeichen im Pfad sauber URL-kodieren
+    safe_path = quote(unquote(parsed.path), safe="/:@-._~!$&'()*+,;=")
+    resolved = urlunparse(
+        (parsed.scheme, parsed.netloc, safe_path, parsed.params, parsed.query, "")
+    )
+    if _is_ignored_filename(resolved):
         return ""
     return resolved
 
@@ -127,6 +188,114 @@ def validate_blueprint_yaml(yaml_text: str) -> tuple[str, str | None]:
     return bp_domain, str(bp_name).strip() if bp_name else None
 
 
+def _extract_urls_from_text_blob(text: str, base_url: str) -> list[tuple[str, int, int]]:
+    """Findet alle YAML- und My-HA-Blueprint-URLs inkl. Position in einem Text-/JS-Block."""
+    if not text:
+        return []
+    cleaned = html_lib.unescape(text).replace("\\/", "/")
+    raw_hits: list[tuple[int, int, str]] = []
+
+    for m in _MY_HA_RE.finditer(cleaned):
+        raw_hits.append((m.start(), m.end(), m.group(0)))
+    for m in _QUOTED_YAML_URL_RE.finditer(cleaned):
+        raw_hits.append((m.start("url"), m.end("url"), m.group("url")))
+    for m in _BARE_YAML_URL_RE.finditer(cleaned):
+        raw_hits.append((m.start(), m.end(), m.group(0)))
+
+    raw_hits.sort(key=lambda item: (item[0], -(item[1] - item[0])))
+
+    results: list[tuple[str, int, int]] = []
+    seen_spans: list[tuple[int, int]] = []
+    for start, end, raw_u in raw_hits:
+        if any(s <= start and end <= e for s, e in seen_spans):
+            continue
+        norm = normalize_blueprint_url(raw_u, base_url)
+        if not norm:
+            continue
+        if not norm.lower().split("?")[0].endswith((".yaml", ".yml")):
+            continue
+        seen_spans.append((start, end))
+        results.append((norm, start, end))
+    return results
+
+
+def _slice_enclosing_js_object(text: str, start: int, end: int) -> str:
+    """Extrahiert das umschließende { ... }-JS-Objekt um eine URL-Position."""
+    depth = 0
+    obj_start = -1
+    for i in range(start - 1, max(-1, start - 1200), -1):
+        ch = text[i]
+        if ch == "}":
+            depth += 1
+        elif ch == "{":
+            if depth == 0:
+                obj_start = i
+                break
+            depth -= 1
+
+    if obj_start != -1:
+        depth = 0
+        for j in range(end, min(len(text), end + 1200)):
+            ch = text[j]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                if depth == 0:
+                    return text[obj_start : j + 1]
+                depth -= 1
+
+    return text[max(0, start - 220) : min(len(text), end + 220)]
+
+
+def extract_blueprints_from_js_blob(
+    blob: str, base_url: str, seen: set[str]
+) -> list[dict]:
+    """Extrahiert Blueprint-Objekte (Titel, Beschreibung, URL) aus JS/Alpine-Code."""
+    found: list[dict] = []
+    if not blob:
+        return found
+
+    cleaned = html_lib.unescape(blob).replace("\\/", "/")
+    hits = _extract_urls_from_text_blob(cleaned, base_url)
+
+    for norm, start, end in hits:
+        if norm in seen:
+            continue
+        seen.add(norm)
+
+        obj_slice = _slice_enclosing_js_object(cleaned, start, end)
+
+        title_match = re.search(
+            r"""(?:["']?(?:title|name|titel|heading|label)["']?)\s*:\s*(?P<q>["'`])(?P<val>[^"'`]{2,160})(?P=q)""",
+            obj_slice,
+            re.IGNORECASE,
+        )
+        desc_match = re.search(
+            r"""(?:["']?(?:description|desc|beschreibung|subtitle|text|info)["']?)\s*:\s*(?P<q>["'`])(?P<val>[^"'`]{4,400})(?P=q)""",
+            obj_slice,
+            re.IGNORECASE,
+        )
+
+        title = (
+            title_match.group("val").strip()
+            if title_match
+            else _prettify_filename(norm)
+        )
+        description = desc_match.group("val").strip() if desc_match else ""
+        fname = build_safe_filename(norm, title)
+
+        found.append(
+            {
+                "id": fname,
+                "filename": fname,
+                "title": title[:160],
+                "description": description[:350],
+                "url": norm,
+            }
+        )
+    return found
+
+
 @dataclass
 class _Node:
     tag: str
@@ -148,7 +317,7 @@ class _Node:
 
 
 class _BlueprintHTMLTreeParser(HTMLParser):
-    """Baut einen kompakten DOM-Baum auf und sammelt alle YAML-Blueprint-URLs."""
+    """Baut einen kompakten DOM-Baum auf und sammelt alle Blueprint-URLs aus Attributen, Text & Scripts."""
 
     def __init__(self, base_url: str) -> None:
         super().__init__(convert_charrefs=True)
@@ -156,29 +325,68 @@ class _BlueprintHTMLTreeParser(HTMLParser):
         self.root = _Node(tag="document")
         self._stack: list[_Node] = [self.root]
         self.url_nodes: list[tuple[str, _Node]] = []
-        self.script_blocks: list[str] = []
+        self.js_blobs: list[str] = []
+        self.external_scripts: list[str] = []
+        self.candidate_subpages: list[str] = []
 
-    def _extract_urls_from_attrs(self, attrs_dict: dict[str, str]) -> list[str]:
-        found: list[str] = []
+    def _register_node_url(self, node: _Node, url: str) -> None:
+        if url not in node.own_urls:
+            node.own_urls.append(url)
+            self.url_nodes.append((url, node))
+        cur: _Node | None = node
+        while cur is not None:
+            cur.subtree_urls.add(url)
+            cur = cur.parent
+
+    def _inspect_attrs(self, tag: str, attrs_dict: dict[str, str], node: _Node) -> None:
+        base_host = urlparse(self.base_url).netloc.lower()
+
+        if tag == "script" and attrs_dict.get("src"):
+            script_url = urljoin(self.base_url, attrs_dict["src"].strip())
+            s_parsed = urlparse(script_url)
+            s_host = s_parsed.netloc.lower()
+            if (
+                s_parsed.scheme in ("http", "https")
+                and s_host == base_host
+                and not any(cdn in s_host for cdn in _CDN_HOSTS)
+                and script_url not in self.external_scripts
+            ):
+                self.external_scripts.append(script_url)
+
+        if tag == "a" and attrs_dict.get("href"):
+            href_val = attrs_dict["href"].strip()
+            if "blueprint" in href_val.lower() and not href_val.startswith("#"):
+                sub_url = urljoin(self.base_url, href_val)
+                sub_parsed = urlparse(sub_url)
+                if (
+                    sub_parsed.scheme in ("http", "https")
+                    and sub_parsed.netloc.lower() == base_host
+                    and not sub_parsed.path.lower().endswith((".yaml", ".yml"))
+                    and sub_url != self.base_url
+                    and sub_url not in self.candidate_subpages
+                ):
+                    self.candidate_subpages.append(sub_url)
+
+        # JEDES Attribut (inkl. href, value, onclick, @click, x-on:click, :href, x-data, data-*) prüfen!
         for attr_name, attr_val in attrs_dict.items():
             if not attr_val:
                 continue
-            lname = attr_name.lower()
-            if lname in (
-                "href", "data-url", "data-blueprint", "data-copy",
-                "data-link", "data-href", "value",
-            ):
-                val = attr_val.strip()
-                if ".yaml" in val.lower() or ".yml" in val.lower() or "blueprint_url=" in val.lower():
-                    norm = normalize_blueprint_url(val, self.base_url)
-                    if norm and norm.lower().split("?")[0].endswith((".yaml", ".yml")):
-                        found.append(norm)
-            elif lname == "onclick" or lname.startswith("data-"):
-                for match in _YAML_URL_RE.findall(attr_val):
-                    norm = normalize_blueprint_url(match, self.base_url)
-                    if norm:
-                        found.append(norm)
-        return found
+            lval = attr_val.lower()
+            if ".yaml" not in lval and ".yml" not in lval and "blueprint_url=" not in lval:
+                continue
+
+            hits = _extract_urls_from_text_blob(attr_val, self.base_url)
+
+            if len(hits) > 1 or attr_name in ("x-data", "x-init"):
+                self.js_blobs.append(attr_val)
+                continue
+
+            if len(hits) == 1:
+                self._register_node_url(node, hits[0][0])
+            elif attr_name in ("href", "value", "data-url", "data-href", "data-blueprint"):
+                norm = normalize_blueprint_url(attr_val, self.base_url)
+                if norm and norm.lower().split("?")[0].endswith((".yaml", ".yml")):
+                    self._register_node_url(node, norm)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         ltag = tag.lower()
@@ -187,15 +395,7 @@ class _BlueprintHTMLTreeParser(HTMLParser):
         node = _Node(tag=ltag, attrs=attrs_dict, parent=parent)
         parent.children.append(node)
 
-        urls = self._extract_urls_from_attrs(attrs_dict)
-        for u in urls:
-            if u not in node.own_urls:
-                node.own_urls.append(u)
-                self.url_nodes.append((u, node))
-            cur: _Node | None = node
-            while cur is not None:
-                cur.subtree_urls.add(u)
-                cur = cur.parent
+        self._inspect_attrs(ltag, attrs_dict, node)
 
         if ltag not in _VOID_TAGS:
             self._stack.append(node)
@@ -212,11 +412,20 @@ class _BlueprintHTMLTreeParser(HTMLParser):
             return
         cur = self._stack[-1]
         if cur.tag == "script":
-            self.script_blocks.append(data)
-        elif cur.tag != "style":
-            stripped = data.strip()
-            if stripped:
-                cur.texts.append(stripped)
+            self.js_blobs.append(data)
+            return
+        if cur.tag == "style":
+            return
+
+        stripped = data.strip()
+        if not stripped:
+            return
+        cur.texts.append(stripped)
+
+        ltext = stripped.lower()
+        if "http" in ltext and (".yaml" in ltext or ".yml" in ltext or "blueprint_url=" in ltext):
+            for norm, _, _ in _extract_urls_from_text_blob(stripped, self.base_url):
+                self._register_node_url(cur, norm)
 
 
 def _find_card_node(node: _Node, url: str) -> _Node:
@@ -248,7 +457,7 @@ def _extract_card_metadata(card: _Node, url: str) -> tuple[str, str]:
                 headings.append(t)
         elif n.tag == "p":
             t = n.full_text()
-            if t and t.lower() not in _GENERIC_LINK_TEXTS:
+            if t and t.lower() not in _GENERIC_LINK_TEXTS and not t.startswith("http"):
                 paragraphs.append(t)
         elif n.tag in ("strong", "b"):
             t = n.full_text()
@@ -256,7 +465,7 @@ def _extract_card_metadata(card: _Node, url: str) -> tuple[str, str]:
                 strongs.append(t)
         elif n.tag == "a":
             t = n.full_text()
-            if t and t.lower() not in _GENERIC_LINK_TEXTS:
+            if t and t.lower() not in _GENERIC_LINK_TEXTS and not t.startswith("http"):
                 link_texts.append(t)
         for ch in n.children:
             walk(ch)
@@ -281,58 +490,19 @@ def _extract_card_metadata(card: _Node, url: str) -> tuple[str, str]:
     return title[:160], description[:350]
 
 
-def _extract_from_scripts(scripts: list[str], base_url: str, seen: set[str]) -> list[dict]:
-    """Fallback: findet Blueprint-URLs in JS-Arrays/Objekten innerhalb von <script>-Blöcken."""
-    found: list[dict] = []
-    joined = "\n".join(scripts)
-    if not joined:
-        return found
-
-    for match in _YAML_URL_RE.finditer(joined):
-        raw_url = match.group(0)
-        norm = normalize_blueprint_url(raw_url, base_url)
-        if not norm or norm in seen:
-            continue
-        seen.add(norm)
-
-        start = max(0, match.start() - 350)
-        end = min(len(joined), match.end() + 250)
-        window = joined[start:end]
-
-        title_match = re.search(
-            r"""(?:title|name)\s*[:=]\s*["']([^"']{3,120})["']""",
-            window,
-            re.IGNORECASE,
-        )
-        desc_match = re.search(
-            r"""(?:description|desc|text)\s*[:=]\s*["']([^"']{5,350})["']""",
-            window,
-            re.IGNORECASE,
-        )
-
-        title = title_match.group(1).strip() if title_match else _prettify_filename(norm)
-        description = desc_match.group(1).strip() if desc_match else ""
-        fname = build_safe_filename(norm, title)
-
-        found.append(
-            {
-                "id": fname,
-                "filename": fname,
-                "title": title,
-                "description": description,
-                "url": norm,
-            }
-        )
-    return found
-
-
-def parse_blueprints_catalog(raw_text: str, base_url: str) -> list[dict]:
-    """Parst Blueprints entweder aus JSON-Index oder aus einer HTML-Webseite."""
+def parse_blueprints_catalog_with_hints(
+    raw_text: str, base_url: str
+) -> tuple[list[dict], list[str], list[str]]:
+    """Parst Blueprints aus JSON oder HTML und liefert zusätzlich Script- & Subpage-URLs."""
     stripped = raw_text.lstrip()
     if stripped.startswith(("[", "{")):
         try:
             payload = json.loads(stripped)
-            items = payload.get("blueprints", []) if isinstance(payload, dict) else payload
+            items = (
+                payload.get("blueprints", [])
+                if isinstance(payload, dict)
+                else payload
+            )
             if isinstance(items, list):
                 results: list[dict] = []
                 seen_json: set[str] = set()
@@ -343,7 +513,11 @@ def parse_blueprints_catalog(raw_text: str, base_url: str) -> list[dict]:
                     if not norm or norm in seen_json:
                         continue
                     seen_json.add(norm)
-                    title = str(entry.get("title") or entry.get("name") or _prettify_filename(norm)).strip()
+                    title = str(
+                        entry.get("title")
+                        or entry.get("name")
+                        or _prettify_filename(norm)
+                    ).strip()
                     desc = str(entry.get("description") or "").strip()
                     fname = build_safe_filename(norm, title)
                     results.append(
@@ -356,7 +530,7 @@ def parse_blueprints_catalog(raw_text: str, base_url: str) -> list[dict]:
                         }
                     )
                 if results:
-                    return results
+                    return results, [], []
         except json.JSONDecodeError:
             pass
 
@@ -383,7 +557,15 @@ def parse_blueprints_catalog(raw_text: str, base_url: str) -> list[dict]:
             }
         )
 
-    blueprints.extend(_extract_from_scripts(parser.script_blocks, base_url, seen_urls))
+    for blob in parser.js_blobs:
+        blueprints.extend(extract_blueprints_from_js_blob(blob, base_url, seen_urls))
+
+    return blueprints, parser.external_scripts, parser.candidate_subpages
+
+
+def parse_blueprints_catalog(raw_text: str, base_url: str) -> list[dict]:
+    """Kompatibilitäts-Wrapper: gibt nur die erkannte Blueprint-Liste zurück."""
+    blueprints, _, _ = parse_blueprints_catalog_with_hints(raw_text, base_url)
     return blueprints
 
 

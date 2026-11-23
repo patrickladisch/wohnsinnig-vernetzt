@@ -19,10 +19,12 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .blueprints import (
+    HTTP_HEADERS,
     annotate_installed_status,
     build_safe_filename,
+    extract_blueprints_from_js_blob,
     normalize_blueprint_url,
-    parse_blueprints_catalog,
+    parse_blueprints_catalog_with_hints,
     validate_blueprint_yaml,
     write_blueprint_file,
 )
@@ -224,6 +226,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.playback_state: str = "idle"
         self.play_command_id: int = 0
         self.last_command_action: str = "idle"
+        self.blueprints_last_error: str | None = None
         self._state_loaded: bool = False
 
     async def _async_load_state(self) -> None:
@@ -314,19 +317,23 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         return 0
 
     async def _async_fetch_blueprints(self, session: aiohttp.ClientSession) -> list[dict]:
-        """Lädt die Website und extrahiert alle verlinkten Blueprints."""
+        """Lädt die Website (inkl. Scripts/Unterseiten bei Bedarf) und extrahiert alle Blueprints."""
         if not self.blueprints_url:
+            self.blueprints_last_error = "Keine Blueprints-URL konfiguriert."
             return []
+
+        self.blueprints_last_error = None
         try:
             async with session.get(
                 self.blueprints_url,
                 timeout=aiohttp.ClientTimeout(total=20),
-                headers={"User-Agent": "HomeAssistant-WohnsinnigVernetzt/1.3"},
+                headers=HTTP_HEADERS,
             ) as response:
                 response.raise_for_status()
-                raw_text = await response.text()
+                raw_text = await response.text(errors="replace")
                 final_url = str(response.url)
         except (aiohttp.ClientError, TimeoutError) as err:
+            self.blueprints_last_error = f"Abruf fehlgeschlagen: {err}"
             _LOGGER.warning(
                 "Blueprints konnten nicht von %s geladen werden: %s",
                 self.blueprints_url,
@@ -335,13 +342,66 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             return (self.data or {}).get("blueprints", [])
 
         try:
-            parsed = await self.hass.async_add_executor_job(
-                parse_blueprints_catalog, raw_text, final_url
+            parsed, ext_scripts, subpages = await self.hass.async_add_executor_job(
+                parse_blueprints_catalog_with_hints, raw_text, final_url
             )
+
+            # Fallback 1: externe same-origin JS-Dateien scannen, falls HTML selbst keine Links enthielt
+            if not parsed and ext_scripts:
+                seen_urls: set[str] = set()
+                for script_url in ext_scripts[:6]:
+                    try:
+                        async with session.get(
+                            script_url,
+                            timeout=aiohttp.ClientTimeout(total=15),
+                            headers=HTTP_HEADERS,
+                        ) as s_resp:
+                            if s_resp.status == 200:
+                                js_text = await s_resp.text(errors="replace")
+                                found_js = await self.hass.async_add_executor_job(
+                                    extract_blueprints_from_js_blob,
+                                    js_text,
+                                    final_url,
+                                    seen_urls,
+                                )
+                                parsed.extend(found_js)
+                    except (aiohttp.ClientError, TimeoutError):
+                        continue
+
+            # Fallback 2: verlinkte Blueprint-Unterseite (z. B. /blueprints) prüfen
+            if not parsed and subpages:
+                for sub_url in subpages[:3]:
+                    try:
+                        async with session.get(
+                            sub_url,
+                            timeout=aiohttp.ClientTimeout(total=15),
+                            headers=HTTP_HEADERS,
+                        ) as sub_resp:
+                            if sub_resp.status == 200:
+                                sub_text = await sub_resp.text(errors="replace")
+                                sub_bps, _, _ = await self.hass.async_add_executor_job(
+                                    parse_blueprints_catalog_with_hints,
+                                    sub_text,
+                                    str(sub_resp.url),
+                                )
+                                if sub_bps:
+                                    parsed.extend(sub_bps)
+                                    break
+                    except (aiohttp.ClientError, TimeoutError):
+                        continue
+
+            if not parsed:
+                self.blueprints_last_error = (
+                    f"Keine .yaml-Links auf {final_url} erkannt "
+                    f"({len(raw_text)} Bytes geladen)."
+                )
+                _LOGGER.warning("%s", self.blueprints_last_error)
+
             return await self.hass.async_add_executor_job(
                 annotate_installed_status, parsed, self.hass.config.config_dir
             )
         except Exception as err:
+            self.blueprints_last_error = f"Parse-Fehler: {err}"
             _LOGGER.warning("Fehler beim Parsen der Blueprints: %s", err)
             return (self.data or {}).get("blueprints", [])
 
@@ -385,10 +445,10 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             async with session.get(
                 resolved_url,
                 timeout=aiohttp.ClientTimeout(total=20),
-                headers={"User-Agent": "HomeAssistant-WohnsinnigVernetzt/1.3"},
+                headers=HTTP_HEADERS,
             ) as response:
                 response.raise_for_status()
-                yaml_text = await response.text()
+                yaml_text = await response.text(errors="replace")
         except (aiohttp.ClientError, TimeoutError) as err:
             raise HomeAssistantError(
                 f"Blueprint konnte nicht heruntergeladen werden: {err}"

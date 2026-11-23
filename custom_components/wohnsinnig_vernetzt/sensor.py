@@ -128,6 +128,7 @@ class WohnsinnigVernetztBlueprintsSensor(WohnsinnigVernetztEntity, SensorEntity)
         return {
             "source_url": self.coordinator.blueprints_url,
             "installed_count": sum(1 for bp in bps if bp.get("installed")),
+            "last_error": self.coordinator.blueprints_last_error,
             "blueprints": [
                 {
                     "title": bp["title"],
