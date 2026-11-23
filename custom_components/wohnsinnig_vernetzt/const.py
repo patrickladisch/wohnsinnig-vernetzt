@@ -1,10 +1,10 @@
 """Konstanten für Wohnsinnig vernetzt."""
 
 DOMAIN = "wohnsinnig_vernetzt"
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 
 DEFAULT_RSS_URL = "https://anchor.fm/s/111a8abd0/podcast/rss"
-DEFAULT_LOGO_URL = ""  # Optional: direkte URL zum Website-Logo (sonst RSS-Cover)
+DEFAULT_LOGO_URL = "/wohnsinnig_vernetzt/logo.png"
 DEFAULT_FEEDBACK_WEBHOOK_URL = ""  # z. B. Formspree, n8n, Discord oder eigener Endpoint
 DEFAULT_FEEDBACK_FALLBACK_URL = "https://www.wohnsinnigvernetzt.de"
 

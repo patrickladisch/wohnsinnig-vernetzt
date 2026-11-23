@@ -71,7 +71,7 @@ def _build_schema(hass: HomeAssistant, defaults: dict) -> vol.Schema:
             ): vol.All(vol.Coerce(int), vol.Range(min=5, max=1440)),
             vol.Optional(
                 CONF_LOGO_URL,
-                default=defaults.get(CONF_LOGO_URL, DEFAULT_LOGO_URL),
+                default=defaults.get(CONF_LOGO_URL) or DEFAULT_LOGO_URL,
             ): str,
             vol.Optional(
                 CONF_FEEDBACK_WEBHOOK_URL,

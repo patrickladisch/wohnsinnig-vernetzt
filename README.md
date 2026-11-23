@@ -24,9 +24,5 @@ title: Wohnsinnig vernetzt
 show_list_default: true
 ```
 
-## Integrations-Logo einbinden
-Lege euer Website-Logo in diesen Größen im Ordner `custom_components/wohnsinnig_vernetzt/brand/` ab (für HA 2026.3+) und reiche sie zusätzlich im offiziellen `home-assistant/brands`-Repository unter `custom_integrations/wohnsinnig_vernetzt/` ein:
-- `icon.png` (256×256 px, quadratisch, transparenter Hintergrund)
-- `icon@2x.png` (512×512 px)
-- `logo.png` (Breite 256–512 px)
-- `logo@2x.png` (doppelte Auflösung)
+## Integrations-Logo
+Das offizielle **Wohnsinnig vernetzt**-Logo ist bereits fertig skaliert im Ordner `custom_components/wohnsinnig_vernetzt/brand/` (`icon.png`, `icon@2x.png`, `logo.png`, `logo@2x.png`) sowie unter `www/logo.png` für Sensor & Dashboard-Karte enthalten.

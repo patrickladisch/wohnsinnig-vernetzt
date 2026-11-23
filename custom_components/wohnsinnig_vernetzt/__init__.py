@@ -146,7 +146,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         scan_interval_minutes=int(
             config.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
         ),
-        logo_url=config.get(CONF_LOGO_URL, DEFAULT_LOGO_URL),
+        logo_url=config.get(CONF_LOGO_URL) or DEFAULT_LOGO_URL,
         feedback_webhook_url=config.get(
             CONF_FEEDBACK_WEBHOOK_URL, DEFAULT_FEEDBACK_WEBHOOK_URL
         ),
