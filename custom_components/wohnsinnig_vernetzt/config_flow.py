@@ -9,17 +9,17 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_FEEDBACK_WEBHOOK_URL,
     CONF_LOGO_URL,
     CONF_NOTIFY_SERVICE,
     CONF_NOTIFY_SERVICES,
     CONF_RSS_URL,
     CONF_SCAN_INTERVAL,
-    DEFAULT_FEEDBACK_WEBHOOK_URL,
+    CONF_SPOTIFY_SHOW_URL,
     DEFAULT_LOGO_URL,
     DEFAULT_NOTIFY_SERVICES,
     DEFAULT_RSS_URL,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SPOTIFY_SHOW_URL,
     DOMAIN,
 )
 from .coordinator import normalize_notify_services
@@ -70,14 +70,14 @@ def _build_schema(hass: HomeAssistant, defaults: dict) -> vol.Schema:
                 default=defaults.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
             ): vol.All(vol.Coerce(int), vol.Range(min=5, max=1440)),
             vol.Optional(
-                CONF_LOGO_URL,
-                default=defaults.get(CONF_LOGO_URL) or DEFAULT_LOGO_URL,
+                CONF_SPOTIFY_SHOW_URL,
+                default=defaults.get(
+                    CONF_SPOTIFY_SHOW_URL, DEFAULT_SPOTIFY_SHOW_URL
+                ),
             ): str,
             vol.Optional(
-                CONF_FEEDBACK_WEBHOOK_URL,
-                default=defaults.get(
-                    CONF_FEEDBACK_WEBHOOK_URL, DEFAULT_FEEDBACK_WEBHOOK_URL
-                ),
+                CONF_LOGO_URL,
+                default=defaults.get(CONF_LOGO_URL) or DEFAULT_LOGO_URL,
             ): str,
         }
     )

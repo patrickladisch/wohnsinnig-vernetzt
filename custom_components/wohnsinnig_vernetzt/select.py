@@ -1,4 +1,4 @@
-"""Select-Entität zur Auswahl aus allen Podcast-Folgen."""
+"""Select-Entitäten für Episodenwahl (mit Direktstart) und Wiedergabe-Gerät."""
 
 from __future__ import annotations
 
@@ -7,9 +7,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import BROWSER_TARGET, BROWSER_TARGET_LABEL, DOMAIN
 from .coordinator import WohnsinnigVernetztCoordinator
 from .entity import WohnsinnigVernetztEntity
+from .media_player import get_available_targets
 
 
 async def async_setup_entry(
@@ -17,16 +18,21 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Erstellt das Episoden-Dropdown."""
+    """Erstellt die Auswahlmenüs für Folgen und Wiedergabe-Gerät."""
     coordinator: WohnsinnigVernetztCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([WohnsinnigVernetztEpisodeSelect(coordinator, entry.entry_id)])
+    async_add_entities(
+        [
+            WohnsinnigVernetztEpisodeSelect(coordinator, entry.entry_id),
+            WohnsinnigVernetztTargetSelect(coordinator, entry.entry_id),
+        ]
+    )
 
 
 class WohnsinnigVernetztEpisodeSelect(WohnsinnigVernetztEntity, SelectEntity):
-    """Dropdown mit allen verfügbaren Podcast-Folgen."""
+    """Dropdown mit allen Folgen – Auswahl startet direkt den Media Player."""
 
-    _attr_name = "Folge auswählen"
-    _attr_icon = "mdi:format-list-bulleted"
+    _attr_name = "Folge auswählen & abspielen"
+    _attr_icon = "mdi:play-box-multiple"
 
     def __init__(
         self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
@@ -73,11 +79,39 @@ class WohnsinnigVernetztEpisodeSelect(WohnsinnigVernetztEntity, SelectEntity):
             "pub_date": ep.get("pub_date", ""),
             "duration": ep.get("duration", ""),
             "audio_url": ep.get("audio_url", ""),
-            "description": ep.get("description", ""),
         }
 
     async def async_select_option(self, option: str) -> None:
         mapping = self._option_map()
         ep = mapping.get(option)
         if ep:
-            await self.coordinator.async_set_selected_episode(ep["guid"])
+            await self.coordinator.async_play_episode(ep["guid"])
+
+
+class WohnsinnigVernetztTargetSelect(WohnsinnigVernetztEntity, SelectEntity):
+    """Wählt aus, ob Folgen im Dashboard-Browser oder auf einem HA-Lautsprecher laufen."""
+
+    _attr_name = "Wiedergabe-Gerät"
+    _attr_icon = "mdi:speaker-wireless"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "target_player")
+
+    @property
+    def options(self) -> list[str]:
+        return list(get_available_targets(self.hass).keys())
+
+    @property
+    def current_option(self) -> str | None:
+        targets = get_available_targets(self.hass)
+        for label, entity_id in targets.items():
+            if entity_id == self.coordinator.target_entity:
+                return label
+        return BROWSER_TARGET_LABEL
+
+    async def async_select_option(self, option: str) -> None:
+        targets = get_available_targets(self.hass)
+        target_id = targets.get(option, BROWSER_TARGET)
+        await self.coordinator.async_set_target_entity(target_id)

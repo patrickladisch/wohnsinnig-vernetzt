@@ -1,12 +1,12 @@
 # Wohnsinnig vernetzt – Home Assistant Integration
 
-Hol dir alle Folgen von **Wohnsinnig vernetzt** direkt in Home Assistant – mit Episodenliste, automatischer Benachrichtigung bei neuen Folgen, kompaktem Dashboard-Player und direkter Feedback-Funktion.
+Hol dir alle Folgen von **Wohnsinnig vernetzt** direkt in Home Assistant – mit echtem Media Player, Episodenliste, automatischer Benachrichtigung bei neuen Folgen und Dashboard-Karte.
 
 ## Features
-- **Alle Folgen im Blick:** Zeigt die neueste Folge, die Gesamtanzahl inkl. Episodenliste und ein Dropdown-Steuerelement (`select`) mit allen Folgen.
-- **Benachrichtigungen bei neuen Folgen:** Ein-/Ausschaltbar direkt auf der Geräteseite, Mehrfachauswahl deiner `notify`-Dienste (z. B. Handy + HA-Seitenleiste), Test-Button und eigener Geräte-Auslöser für Automationen.
-- **Dashboard-Player:** Integrierter HTML5-Audioplayer (Play/Pause, -15s/+30s, Geschwindigkeit 1x–2x, Fortschrittsbalken, Episodensuche & komplette Liste).
-- **Feedback senden:** Direkt über die Dashboard-Karte, über die Geräteseite oder per Aktion `wohnsinnig_vernetzt.send_feedback`.
+- **Echter Home Assistant Media Player (`media_player.wohnsinnig_vernetzt_player`):** Spielt Episoden direkt über die originale RSS-Tracking-URL im Dashboard-Browser oder auf jedem Home-Assistant-Lautsprecher (z. B. Sonos, Google Cast, Echo/Music Assistant) ab – inklusive Medien-Browser mit allen Folgen.
+- **Direktstart über das Episoden-Dropdown:** Sobald du eine Folge unter *Folge auswählen* wählst, startet die Wiedergabe automatisch auf dem eingestellten Wiedergabe-Gerät.
+- **Optionaler Spotify-Embed-Modus:** Hinterlege in den Optionen eure Spotify-Show-URL, um direkt in der Dashboard-Karte auf den offiziellen Spotify-Player umzuschalten (für native Spotify-App-Streams).
+- **Benachrichtigungen bei neuen Folgen:** Direkt auf der Geräteseite ein-/ausschaltbar, mit Mehrfachauswahl deiner `notify`-Dienste, Test-Button und Geräte-Auslöser für Automationen.
 
 ## Installation über HACS
 1. **HACS** öffnen → oben rechts auf die **drei Punkte** → **Benutzerdefinierte Repositories**.
@@ -16,13 +16,10 @@ Hol dir alle Folgen von **Wohnsinnig vernetzt** direkt in Home Assistant – mit
 5. Unter **Einstellungen → Geräte & Dienste → Integration hinzufügen** nach **Wohnsinnig vernetzt** suchen.
 
 ## Dashboard-Karte hinzufügen
-Dashboard bearbeiten → **Karte hinzufügen** → ganz unten **Wohnsinnig vernetzt Player** auswählen.
+Dashboard bearbeiten → **Karte hinzufügen** → ganz unten **Wohnsinnig vernetzt Player** auswählen (oder die Standard-Home-Assistant-Mediensteuerung für `media_player.wohnsinnig_vernetzt_player` verwenden).
 
 ```yaml
 type: custom:wohnsinnig-vernetzt-card
 title: Wohnsinnig vernetzt
 show_list_default: true
 ```
-
-## Integrations-Logo
-Das offizielle **Wohnsinnig vernetzt**-Logo ist bereits fertig skaliert im Ordner `custom_components/wohnsinnig_vernetzt/brand/` (`icon.png`, `icon@2x.png`, `logo.png`, `logo@2x.png`) sowie unter `www/logo.png` für Sensor & Dashboard-Karte enthalten.

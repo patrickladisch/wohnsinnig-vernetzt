@@ -4,19 +4,27 @@ class WohnsinnigVernetztCard extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._episodes = [];
     this._podcastTitle = "Wohnsinnig vernetzt";
-    this._podcastImage = "";
-    this._feedbackConfigured = false;
-    this._feedbackFallbackUrl = "https://www.wohnsinnigvernetzt.de";
+    this._podcastImage = "/wohnsinnig_vernetzt/logo.png";
+    this._spotifyShowId = "";
+    this._spotifyShowUrl = "";
+    this._mode = "direct"; // "direct" | "spotify"
+    this._targetEntity = "__browser__";
+    this._playerEntityId = null;
     this._currentIndex = 0;
     this._listOpen = true;
-    this._feedbackOpen = false;
     this._searchQuery = "";
     this._loaded = false;
     this._lastSensorState = null;
+    this._lastCommandId = null;
+    this._lastRemoteState = null;
+    this._lastSpotifyIframeId = "";
+    this._autoplayBlocked = false;
     this._speeds = [1, 1.25, 1.5, 2];
     this._speedIdx = 0;
+
     this._audio = new Audio();
-    this._audio.preload = "metadata";
+    // Wichtig für IAB / Spotify-for-Creators-Zählung: kein Vorladen vor echtem Klick
+    this._audio.preload = "none";
     this._setupAudioEvents();
   }
 
@@ -39,6 +47,18 @@ class WohnsinnigVernetztCard extends HTMLElement {
     }
   }
 
+  _findPlayerEntity(hass) {
+    if (hass.states["media_player.wohnsinnig_vernetzt_player"]) {
+      return hass.states["media_player.wohnsinnig_vernetzt_player"];
+    }
+    return Object.values(hass.states).find(
+      (s) =>
+        s.entity_id.startsWith("media_player.wohnsinnig_vernetzt") &&
+        s.attributes &&
+        "play_command_id" in s.attributes
+    );
+  }
+
   set hass(hass) {
     this._hass = hass;
     const sensor =
@@ -56,9 +76,51 @@ class WohnsinnigVernetztCard extends HTMLElement {
       this._loaded = true;
       this._fetchEpisodes();
     }
+
+    const player = this._findPlayerEntity(hass);
+    if (player) {
+      this._playerEntityId = player.entity_id;
+      const newTarget = player.attributes.target_entity || "__browser__";
+      const targetChanged = newTarget !== this._targetEntity;
+      this._targetEntity = newTarget;
+
+      if (targetChanged) {
+        if (this._targetEntity !== "__browser__" && !this._audio.paused) {
+          this._audio.pause();
+        }
+        this._updateTargetIndicator();
+      }
+
+      const cmdId = player.attributes.play_command_id;
+      const action = player.attributes.last_command_action;
+      const selectedGuid = player.attributes.selected_guid;
+
+      if (this._lastCommandId === null) {
+        this._lastCommandId = cmdId;
+      } else if (cmdId !== this._lastCommandId) {
+        this._lastCommandId = cmdId;
+        this._handleRemoteCommand(action, selectedGuid);
+      }
+
+      if (this._targetEntity !== "__browser__") {
+        if (
+          player.state !== this._lastRemoteState ||
+          (selectedGuid &&
+            this._episodes[this._currentIndex]?.guid !== selectedGuid)
+        ) {
+          this._lastRemoteState = player.state;
+          if (selectedGuid) {
+            const idx = this._episodes.findIndex((e) => e.guid === selectedGuid);
+            if (idx >= 0) this._currentIndex = idx;
+          }
+          this._updateUI();
+        }
+      }
+    }
   }
 
   getCardSize() {
+    if (this._mode === "spotify") return 7;
     return this._listOpen ? 8 : 4;
   }
 
@@ -66,36 +128,94 @@ class WohnsinnigVernetztCard extends HTMLElement {
     if (!this._hass) return;
     try {
       const data = await this._hass.callApi("GET", "wohnsinnig_vernetzt/episodes");
-      const currentGuid = this._episodes[this._currentIndex]?.guid;
-      this._podcastTitle = this._config.title || data.title || "Wohnsinnig vernetzt";
-      this._podcastImage = data.image || "";
-      this._episodes = data.episodes || [];
-      this._feedbackConfigured = Boolean(data.feedback_configured);
-      this._feedbackFallbackUrl =
-        data.feedback_fallback_url || "https://www.wohnsinnigvernetzt.de";
+      const preferredGuid =
+        data.selected_episode_guid || this._episodes[this._currentIndex]?.guid;
 
-      if (currentGuid) {
-        const idx = this._episodes.findIndex((e) => e.guid === currentGuid);
+      this._podcastTitle = this._config.title || data.title || "Wohnsinnig vernetzt";
+      this._podcastImage = data.image || "/wohnsinnig_vernetzt/logo.png";
+      this._episodes = data.episodes || [];
+      this._spotifyShowId = data.spotify_show_id || "";
+      this._spotifyShowUrl = data.spotify_show_url || "";
+      this._targetEntity = data.target_entity || "__browser__";
+
+      if (preferredGuid) {
+        const idx = this._episodes.findIndex((e) => e.guid === preferredGuid);
         this._currentIndex = idx >= 0 ? idx : 0;
       } else {
         this._currentIndex = 0;
       }
 
-      if (this._episodes.length > 0 && !this._audio.src) {
-        this._audio.src = this._episodes[this._currentIndex].audio_url;
-      }
       this._updateUI();
     } catch (err) {
       this._showError("Podcast-Folgen konnten nicht geladen werden.");
     }
   }
 
+  _handleRemoteCommand(action, guid) {
+    if (this._targetEntity !== "__browser__") return;
+    if (guid) {
+      const idx = this._episodes.findIndex((e) => e.guid === guid);
+      if (idx >= 0) {
+        this._currentIndex = idx;
+      }
+    }
+    const ep = this._episodes[this._currentIndex];
+    if (!ep) return;
+
+    if (action === "play") {
+      if (this._audio.src !== ep.audio_url) {
+        this._audio.src = ep.audio_url;
+      }
+      this._audio.playbackRate = this._speeds[this._speedIdx];
+      this._audio
+        .play()
+        .then(() => {
+          this._autoplayBlocked = false;
+          this._updateUI();
+        })
+        .catch(() => {
+          this._autoplayBlocked = true;
+          this._updateUI();
+        });
+    } else if (action === "pause") {
+      this._audio.pause();
+    } else if (action === "stop") {
+      this._audio.pause();
+      this._audio.currentTime = 0;
+    }
+    this._updateUI();
+  }
+
+  async _syncBrowserState(state) {
+    if (!this._hass || this._targetEntity !== "__browser__") return;
+    const ep = this._episodes[this._currentIndex];
+    try {
+      await this._hass.callApi("POST", "wohnsinnig_vernetzt/player_state", {
+        state,
+        guid: ep ? ep.guid : null,
+      });
+    } catch (_) {
+      // Unkritisch, falls temporär offline
+    }
+  }
+
   _setupAudioEvents() {
     this._audio.addEventListener("timeupdate", () => this._updateProgress());
     this._audio.addEventListener("loadedmetadata", () => this._updateProgress());
-    this._audio.addEventListener("play", () => this._updatePlayIcon());
-    this._audio.addEventListener("pause", () => this._updatePlayIcon());
-    this._audio.addEventListener("ended", () => this._updatePlayIcon());
+    this._audio.addEventListener("play", () => {
+      this._autoplayBlocked = false;
+      this._updatePlayIcon();
+      this._updateHint();
+      this._syncBrowserState("playing");
+    });
+    this._audio.addEventListener("pause", () => {
+      this._updatePlayIcon();
+      this._syncBrowserState("paused");
+    });
+    this._audio.addEventListener("ended", () => {
+      this._updatePlayIcon();
+      this._syncBrowserState("idle");
+    });
   }
 
   _formatTime(sec) {
@@ -110,27 +230,67 @@ class WohnsinnigVernetztCard extends HTMLElement {
     return `${m}:${String(r).padStart(2, "0")}`;
   }
 
+  _isPlaying() {
+    if (this._targetEntity !== "__browser__" && this._hass && this._playerEntityId) {
+      const st = this._hass.states[this._playerEntityId];
+      return st && st.state === "playing";
+    }
+    return !this._audio.paused;
+  }
+
   _selectEpisode(index, autoplay = true) {
     if (index < 0 || index >= this._episodes.length) return;
     const ep = this._episodes[index];
-    const sameTrack = this._currentIndex === index && this._audio.src === ep.audio_url;
     this._currentIndex = index;
 
-    if (!sameTrack) {
+    if (this._targetEntity !== "__browser__" && this._hass && this._playerEntityId) {
+      if (autoplay) {
+        this._hass.callService("media_player", "play_media", {
+          entity_id: this._playerEntityId,
+          media_content_id: ep.guid,
+          media_content_type: "episode",
+        });
+      }
+      this._updateUI();
+      return;
+    }
+
+    if (this._audio.src !== ep.audio_url) {
       this._audio.src = ep.audio_url;
       this._audio.playbackRate = this._speeds[this._speedIdx];
     }
 
     if (autoplay) {
-      this._audio.play().catch(() => {});
+      this._audio.play().catch(() => {
+        this._autoplayBlocked = true;
+        this._updateHint();
+      });
     }
     this._updateUI();
   }
 
   _togglePlay() {
     if (!this._episodes.length) return;
-    if (!this._audio.src) {
-      this._audio.src = this._episodes[this._currentIndex].audio_url;
+
+    if (this._targetEntity !== "__browser__" && this._hass && this._playerEntityId) {
+      if (this._isPlaying()) {
+        this._hass.callService("media_player", "media_pause", {
+          entity_id: this._playerEntityId,
+        });
+      } else {
+        const ep = this._episodes[this._currentIndex];
+        this._hass.callService("media_player", "play_media", {
+          entity_id: this._playerEntityId,
+          media_content_id: ep.guid,
+          media_content_type: "episode",
+        });
+      }
+      return;
+    }
+
+    const ep = this._episodes[this._currentIndex];
+    if (this._audio.src !== ep.audio_url) {
+      this._audio.src = ep.audio_url;
     }
     if (this._audio.paused) {
       this._audio.playbackRate = this._speeds[this._speedIdx];
@@ -141,6 +301,7 @@ class WohnsinnigVernetztCard extends HTMLElement {
   }
 
   _skip(seconds) {
+    if (this._targetEntity !== "__browser__") return;
     if (!Number.isFinite(this._audio.duration)) return;
     this._audio.currentTime = Math.min(
       Math.max(0, this._audio.currentTime + seconds),
@@ -158,16 +319,22 @@ class WohnsinnigVernetztCard extends HTMLElement {
   _updatePlayIcon() {
     const btn = this.shadowRoot.getElementById("play-btn");
     if (!btn) return;
-    btn.innerHTML = this._audio.paused
-      ? `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`
-      : `<svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>`;
+    const playing = this._isPlaying();
+    btn.innerHTML = playing
+      ? `<svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>`
+      : `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
   }
 
   _updateProgress() {
     const bar = this.shadowRoot.getElementById("progress");
     const cur = this.shadowRoot.getElementById("time-current");
     const dur = this.shadowRoot.getElementById("time-total");
-    if (!bar || !cur || !dur) return;
+    const wrap = this.shadowRoot.getElementById("progress-wrap");
+    if (!bar || !cur || !dur || !wrap) return;
+
+    const isBrowser = this._targetEntity === "__browser__";
+    wrap.style.display = isBrowser ? "flex" : "none";
+    if (!isBrowser) return;
 
     const duration = this._audio.duration || 0;
     const current = this._audio.currentTime || 0;
@@ -180,57 +347,35 @@ class WohnsinnigVernetztCard extends HTMLElement {
         : this._episodes[this._currentIndex]?.duration || "0:00";
   }
 
+  _updateTargetIndicator() {
+    const badge = this.shadowRoot.getElementById("target-badge");
+    const skipControls = this.shadowRoot.querySelectorAll(".browser-only");
+    const isBrowser = this._targetEntity === "__browser__";
+
+    skipControls.forEach((el) => {
+      el.style.visibility = isBrowser ? "visible" : "hidden";
+    });
+
+    if (!badge) return;
+    if (isBrowser) {
+      badge.textContent = "🔊 Browser";
+    } else {
+      const targetState = this._hass?.states?.[this._targetEntity];
+      const name = targetState?.attributes?.friendly_name || this._targetEntity;
+      badge.textContent = `🔊 ${name}`;
+    }
+    this._updateProgress();
+  }
+
+  _updateHint() {
+    const hint = this.shadowRoot.getElementById("autoplay-hint");
+    if (!hint) return;
+    hint.style.display = this._autoplayBlocked ? "block" : "none";
+  }
+
   _showError(msg) {
     const titleEl = this.shadowRoot.getElementById("ep-title");
     if (titleEl) titleEl.textContent = msg;
-  }
-
-  async _submitFeedback() {
-    const nameInput = this.shadowRoot.getElementById("fb-name");
-    const msgInput = this.shadowRoot.getElementById("fb-message");
-    const epCheck = this.shadowRoot.getElementById("fb-include-ep");
-    const statusEl = this.shadowRoot.getElementById("fb-status");
-    const submitBtn = this.shadowRoot.getElementById("fb-submit");
-
-    const message = (msgInput?.value || "").trim();
-    const sender = (nameInput?.value || "").trim();
-    const epTitle = epCheck?.checked
-      ? this._episodes[this._currentIndex]?.title || ""
-      : "";
-
-    if (!message) {
-      statusEl.textContent = "Bitte schreibe kurz dein Feedback.";
-      statusEl.className = "fb-status error";
-      return;
-    }
-
-    if (!this._feedbackConfigured) {
-      window.open(this._feedbackFallbackUrl, "_blank", "noopener");
-      statusEl.textContent = "Feedback-Seite geöffnet (kein Webhook konfiguriert).";
-      statusEl.className = "fb-status ok";
-      return;
-    }
-
-    submitBtn.disabled = true;
-    statusEl.textContent = "Wird gesendet…";
-    statusEl.className = "fb-status";
-
-    try {
-      await this._hass.callApi("POST", "wohnsinnig_vernetzt/feedback", {
-        sender,
-        message,
-        episode: epTitle,
-      });
-      msgInput.value = "";
-      statusEl.textContent = "Danke! Dein Feedback wurde gesendet.";
-      statusEl.className = "fb-status ok";
-    } catch (err) {
-      const detail = err?.body?.error || err?.message || "Senden fehlgeschlagen.";
-      statusEl.textContent = detail;
-      statusEl.className = "fb-status error";
-    } finally {
-      submitBtn.disabled = false;
-    }
   }
 
   _renderEpisodeList() {
@@ -277,6 +422,38 @@ class WohnsinnigVernetztCard extends HTMLElement {
     });
   }
 
+  _updateSpotifyEmbed() {
+    const modeBar = this.shadowRoot.getElementById("mode-bar");
+    const directWrap = this.shadowRoot.getElementById("direct-wrap");
+    const spotifyWrap = this.shadowRoot.getElementById("spotify-wrap");
+    const iframe = this.shadowRoot.getElementById("spotify-iframe");
+    const btnDirect = this.shadowRoot.getElementById("mode-direct");
+    const btnSpotify = this.shadowRoot.getElementById("mode-spotify");
+
+    const hasSpotify = Boolean(this._spotifyShowId);
+    if (modeBar) modeBar.style.display = hasSpotify ? "flex" : "none";
+
+    if (!hasSpotify) {
+      this._mode = "direct";
+    }
+
+    if (btnDirect) btnDirect.classList.toggle("active", this._mode === "direct");
+    if (btnSpotify) btnSpotify.classList.toggle("active", this._mode === "spotify");
+
+    if (directWrap) directWrap.style.display = this._mode === "direct" ? "block" : "none";
+    if (spotifyWrap) spotifyWrap.style.display = this._mode === "spotify" ? "block" : "none";
+
+    if (
+      hasSpotify &&
+      this._mode === "spotify" &&
+      iframe &&
+      this._lastSpotifyIframeId !== this._spotifyShowId
+    ) {
+      this._lastSpotifyIframeId = this._spotifyShowId;
+      iframe.src = `https://open.spotify.com/embed/show/${this._spotifyShowId}?utm_source=generator&theme=0`;
+    }
+  }
+
   _updateUI() {
     const ep = this._episodes[this._currentIndex];
     const cover = this.shadowRoot.getElementById("cover");
@@ -285,8 +462,6 @@ class WohnsinnigVernetztCard extends HTMLElement {
     const epMeta = this.shadowRoot.getElementById("ep-meta");
     const listToggle = this.shadowRoot.getElementById("list-toggle");
     const listSection = this.shadowRoot.getElementById("list-section");
-    const fbSection = this.shadowRoot.getElementById("feedback-section");
-    const fbHint = this.shadowRoot.getElementById("fb-hint");
 
     if (podcastLabel) podcastLabel.textContent = this._podcastTitle;
 
@@ -314,19 +489,12 @@ class WohnsinnigVernetztCard extends HTMLElement {
       listSection.style.display = this._listOpen ? "block" : "none";
     }
 
-    if (fbSection) {
-      fbSection.style.display = this._feedbackOpen ? "block" : "none";
-    }
-
-    if (fbHint) {
-      fbHint.textContent = this._feedbackConfigured
-        ? "Dein Feedback landet direkt bei Patrick & Niels."
-        : "Hinweis: Noch kein Webhook hinterlegt – Klick öffnet wohnsinnigvernetzt.de.";
-    }
-
+    this._updateSpotifyEmbed();
+    this._updateTargetIndicator();
     this._renderEpisodeList();
     this._updatePlayIcon();
     this._updateProgress();
+    this._updateHint();
   }
 
   _renderShell() {
@@ -335,6 +503,26 @@ class WohnsinnigVernetztCard extends HTMLElement {
         ha-card {
           padding: 14px;
           color: var(--primary-text-color);
+        }
+        .mode-bar {
+          display: none;
+          gap: 6px;
+          margin-bottom: 10px;
+          background: var(--secondary-background-color);
+          padding: 4px;
+          border-radius: 10px;
+        }
+        .mode-btn {
+          flex: 1;
+          padding: 6px 10px;
+          border-radius: 8px;
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--secondary-text-color);
+        }
+        .mode-btn.active {
+          background: var(--primary-color);
+          color: var(--text-primary-color, #fff);
         }
         .header {
           display: flex;
@@ -353,12 +541,26 @@ class WohnsinnigVernetztCard extends HTMLElement {
           min-width: 0;
           flex: 1;
         }
+        .top-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+        }
         .podcast-label {
           font-size: 11px;
           text-transform: uppercase;
           letter-spacing: 0.05em;
           color: var(--primary-color);
           font-weight: 600;
+        }
+        .target-badge {
+          font-size: 11px;
+          color: var(--secondary-text-color);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 140px;
         }
         .ep-title {
           font-size: 15px;
@@ -373,6 +575,16 @@ class WohnsinnigVernetztCard extends HTMLElement {
         .ep-meta {
           font-size: 12px;
           color: var(--secondary-text-color);
+        }
+        .autoplay-hint {
+          display: none;
+          margin-top: 8px;
+          padding: 6px 10px;
+          border-radius: 8px;
+          font-size: 12px;
+          background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.14);
+          color: var(--primary-color);
+          text-align: center;
         }
         .progress-wrap {
           display: flex;
@@ -419,8 +631,8 @@ class WohnsinnigVernetztCard extends HTMLElement {
           color: var(--primary-text-color);
         }
         .play-btn {
-          width: 40px;
-          height: 40px;
+          width: 42px;
+          height: 42px;
           border-radius: 50%;
           background: var(--primary-color);
           color: var(--text-primary-color, #fff);
@@ -433,26 +645,19 @@ class WohnsinnigVernetztCard extends HTMLElement {
           height: 22px;
           fill: currentColor;
         }
-        .footer-bar {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
+        .list-toggle {
+          width: 100%;
           margin-top: 10px;
           padding-top: 8px;
           border-top: 1px solid var(--divider-color);
-          gap: 8px;
-        }
-        .footer-btn {
           font-size: 12px;
           color: var(--secondary-text-color);
-          padding: 4px 6px;
-          border-radius: 6px;
+          text-align: center;
         }
-        .footer-btn:hover {
+        .list-toggle:hover {
           color: var(--primary-color);
-          background: var(--secondary-background-color);
         }
-        .search-input, .fb-input, .fb-textarea {
+        .search-input {
           width: 100%;
           box-sizing: border-box;
           padding: 8px 10px;
@@ -464,13 +669,9 @@ class WohnsinnigVernetztCard extends HTMLElement {
           font-size: 13px;
           margin-top: 8px;
         }
-        .fb-textarea {
-          min-height: 70px;
-          resize: vertical;
-        }
         .episode-list {
           margin-top: 6px;
-          max-height: 250px;
+          max-height: 260px;
           overflow-y: auto;
         }
         .empty-hint {
@@ -516,105 +717,79 @@ class WohnsinnigVernetztCard extends HTMLElement {
           color: var(--secondary-text-color);
           margin-top: 2px;
         }
-        .feedback-section {
-          margin-top: 10px;
-          padding-top: 8px;
-          border-top: 1px solid var(--divider-color);
-        }
-        .fb-hint {
-          font-size: 11px;
-          color: var(--secondary-text-color);
-          margin-top: 2px;
-        }
-        .fb-check-row {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          font-size: 12px;
-          color: var(--secondary-text-color);
-          margin-top: 8px;
-        }
-        .fb-actions {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 8px;
-          margin-top: 8px;
-        }
-        .fb-submit {
-          padding: 7px 14px;
-          border-radius: 8px;
-          background: var(--primary-color);
-          color: var(--text-primary-color, #fff);
-          font-size: 12px;
-          font-weight: 600;
-        }
-        .fb-submit:disabled {
-          opacity: 0.6;
-        }
-        .fb-status {
-          font-size: 12px;
-          color: var(--secondary-text-color);
-        }
-        .fb-status.ok {
-          color: var(--success-color, #4caf50);
-        }
-        .fb-status.error {
-          color: var(--error-color, #db4437);
+        .spotify-iframe {
+          width: 100%;
+          height: 352px;
+          border: none;
+          border-radius: 12px;
         }
       </style>
       <ha-card>
-        <div class="header">
-          <img id="cover" class="cover" alt="Podcast Cover" />
-          <div class="info">
-            <div id="podcast-label" class="podcast-label">Wohnsinnig vernetzt</div>
-            <div id="ep-title" class="ep-title">Lade Folgen…</div>
-            <div id="ep-meta" class="ep-meta"></div>
+        <div id="mode-bar" class="mode-bar">
+          <button id="mode-direct" class="mode-btn active" type="button">Direkt-Player</button>
+          <button id="mode-spotify" class="mode-btn" type="button">Spotify Player</button>
+        </div>
+
+        <div id="direct-wrap">
+          <div class="header">
+            <img id="cover" class="cover" alt="Podcast Cover" />
+            <div class="info">
+              <div class="top-row">
+                <div id="podcast-label" class="podcast-label">Wohnsinnig vernetzt</div>
+                <div id="target-badge" class="target-badge">🔊 Browser</div>
+              </div>
+              <div id="ep-title" class="ep-title">Lade Folgen…</div>
+              <div id="ep-meta" class="ep-meta"></div>
+            </div>
+          </div>
+
+          <div id="autoplay-hint" class="autoplay-hint">
+            Folge bereit – tippe auf Play zum Starten.
+          </div>
+
+          <div id="progress-wrap" class="progress-wrap">
+            <span id="time-current">0:00</span>
+            <input id="progress" type="range" min="0" max="100" value="0" />
+            <span id="time-total">0:00</span>
+          </div>
+
+          <div class="controls">
+            <button id="speed-btn" class="icon-btn browser-only" type="button">1x</button>
+            <div class="controls-center">
+              <button id="back-btn" class="icon-btn browser-only" type="button">-15s</button>
+              <button id="play-btn" class="play-btn" type="button" aria-label="Abspielen / Pause"></button>
+              <button id="fwd-btn" class="icon-btn browser-only" type="button">+30s</button>
+            </div>
+            <div style="width: 34px;"></div>
+          </div>
+
+          <button id="list-toggle" class="list-toggle" type="button">Alle Folgen</button>
+          <div id="list-section">
+            <input id="search-input" class="search-input" type="search" placeholder="Folgen durchsuchen…" />
+            <div id="episode-list" class="episode-list"></div>
           </div>
         </div>
 
-        <div class="progress-wrap">
-          <span id="time-current">0:00</span>
-          <input id="progress" type="range" min="0" max="100" value="0" />
-          <span id="time-total">0:00</span>
-        </div>
-
-        <div class="controls">
-          <button id="speed-btn" class="icon-btn" type="button">1x</button>
-          <div class="controls-center">
-            <button id="back-btn" class="icon-btn" type="button">-15s</button>
-            <button id="play-btn" class="play-btn" type="button" aria-label="Abspielen / Pause"></button>
-            <button id="fwd-btn" class="icon-btn" type="button">+30s</button>
-          </div>
-          <div style="width: 34px;"></div>
-        </div>
-
-        <div class="footer-bar">
-          <button id="list-toggle" class="footer-btn" type="button">Alle Folgen</button>
-          <button id="feedback-toggle" class="footer-btn" type="button">💬 Feedback senden</button>
-        </div>
-
-        <div id="feedback-section" class="feedback-section" style="display:none;">
-          <div id="fb-hint" class="fb-hint"></div>
-          <input id="fb-name" class="fb-input" type="text" placeholder="Dein Name (optional)" />
-          <textarea id="fb-message" class="fb-textarea" placeholder="Dein Feedback, deine Frage oder Themenwunsch…"></textarea>
-          <label class="fb-check-row">
-            <input id="fb-include-ep" type="checkbox" checked />
-            Aktuelle Folge als Bezug mitschicken
-          </label>
-          <div class="fb-actions">
-            <span id="fb-status" class="fb-status"></span>
-            <button id="fb-submit" class="fb-submit" type="button">Absenden</button>
-          </div>
-        </div>
-
-        <div id="list-section">
-          <input id="search-input" class="search-input" type="search" placeholder="Folgen durchsuchen…" />
-          <div id="episode-list" class="episode-list"></div>
+        <div id="spotify-wrap" style="display:none;">
+          <iframe
+            id="spotify-iframe"
+            class="spotify-iframe"
+            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+            loading="lazy"
+          ></iframe>
         </div>
       </ha-card>
     `;
 
+    this.shadowRoot.getElementById("mode-direct").addEventListener("click", () => {
+      this._mode = "direct";
+      this._updateSpotifyEmbed();
+    });
+    this.shadowRoot.getElementById("mode-spotify").addEventListener("click", () => {
+      this._mode = "spotify";
+      if (!this._audio.paused) this._audio.pause();
+      this._updateSpotifyEmbed();
+    });
     this.shadowRoot.getElementById("play-btn").addEventListener("click", () => this._togglePlay());
     this.shadowRoot.getElementById("back-btn").addEventListener("click", () => this._skip(-15));
     this.shadowRoot.getElementById("fwd-btn").addEventListener("click", () => this._skip(30));
@@ -626,11 +801,6 @@ class WohnsinnigVernetztCard extends HTMLElement {
       this._listOpen = !this._listOpen;
       this._updateUI();
     });
-    this.shadowRoot.getElementById("feedback-toggle").addEventListener("click", () => {
-      this._feedbackOpen = !this._feedbackOpen;
-      this._updateUI();
-    });
-    this.shadowRoot.getElementById("fb-submit").addEventListener("click", () => this._submitFeedback());
     this.shadowRoot.getElementById("search-input").addEventListener("input", (e) => {
       this._searchQuery = e.target.value || "";
       this._renderEpisodeList();
@@ -649,6 +819,6 @@ if (!window.customCards.some((c) => c.type === "wohnsinnig-vernetzt-card")) {
   window.customCards.push({
     type: "wohnsinnig-vernetzt-card",
     name: "Wohnsinnig vernetzt Player",
-    description: "Podcast-Player mit Episodenliste, Suche und Feedback-Formular.",
+    description: "Podcast-Player mit direkter Wiedergabe, Lautsprecher-Anbindung und optionalem Spotify-Embed.",
   });
 }

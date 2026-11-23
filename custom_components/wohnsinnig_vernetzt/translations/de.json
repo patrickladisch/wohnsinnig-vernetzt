@@ -3,13 +3,13 @@
     "step": {
       "user": {
         "title": "Wohnsinnig vernetzt einrichten",
-        "description": "RSS-Feed, Benachrichtigungen, Logo und Feedback-Endpunkt konfigurieren.",
+        "description": "RSS-Feed, Benachrichtigungen und optional eure Spotify-Show-URL konfigurieren.",
         "data": {
           "rss_url": "Podcast RSS-URL",
           "notify_services": "Benachrichtigungsdienste bei neuen Folgen",
           "scan_interval": "Abrufintervall (Minuten)",
-          "logo_url": "Website-Logo-URL (optional, überschreibt RSS-Cover)",
-          "feedback_webhook_url": "Feedback-Webhook-URL (optional, z. B. Formspree, n8n oder Discord)"
+          "spotify_show_url": "Spotify-Show-URL (optional, für den offiziellen Spotify-Embed-Player)",
+          "logo_url": "Logo-URL (Standard: lokales Logo der Integration)"
         }
       }
     },
@@ -25,8 +25,8 @@
           "rss_url": "Podcast RSS-URL",
           "notify_services": "Benachrichtigungsdienste bei neuen Folgen",
           "scan_interval": "Abrufintervall (Minuten)",
-          "logo_url": "Website-Logo-URL (optional)",
-          "feedback_webhook_url": "Feedback-Webhook-URL (optional)"
+          "spotify_show_url": "Spotify-Show-URL (optional, für Spotify-Embed-Player)",
+          "logo_url": "Logo-URL"
         }
       }
     }

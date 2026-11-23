@@ -1,4 +1,4 @@
-"""Button-Entitäten für Test-Benachrichtigung, Feed-Refresh und Feedback."""
+"""Button-Entitäten für Test-Benachrichtigung und Feed-Refresh."""
 
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ async def async_setup_entry(
         [
             WohnsinnigVernetztTestNotifyButton(coordinator, entry.entry_id),
             WohnsinnigVernetztRefreshButton(coordinator, entry.entry_id),
-            WohnsinnigVernetztSendFeedbackButton(coordinator, entry.entry_id),
         ]
     )
 
@@ -56,24 +55,3 @@ class WohnsinnigVernetztRefreshButton(WohnsinnigVernetztEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self.coordinator.async_request_refresh()
-
-
-class WohnsinnigVernetztSendFeedbackButton(WohnsinnigVernetztEntity, ButtonEntity):
-    """Sendet die im Textfeld eingegebene Feedback-Nachricht ab."""
-
-    _attr_name = "Feedback absenden"
-    _attr_icon = "mdi:send"
-
-    def __init__(
-        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
-    ) -> None:
-        super().__init__(coordinator, entry_id, "send_feedback")
-
-    async def async_press(self) -> None:
-        selected = self.coordinator.get_selected_episode() or {}
-        await self.coordinator.async_send_feedback(
-            message=self.coordinator.feedback_draft,
-            episode=selected.get("title", ""),
-        )
-        self.coordinator.feedback_draft = ""
-        self.coordinator.async_update_listeners()

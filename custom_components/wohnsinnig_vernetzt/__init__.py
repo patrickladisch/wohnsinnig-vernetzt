@@ -5,55 +5,46 @@ from __future__ import annotations
 from pathlib import Path
 
 from aiohttp import web
-import voluptuous as vol
 
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import HomeAssistant
 
 from .const import (
+    BROWSER_TARGET,
     CARD_FILENAME,
     CARD_URL_BASE,
-    CONF_FEEDBACK_WEBHOOK_URL,
+    CONF_DEFAULT_TARGET,
     CONF_LOGO_URL,
     CONF_NOTIFY_SERVICE,
     CONF_NOTIFY_SERVICES,
     CONF_RSS_URL,
     CONF_SCAN_INTERVAL,
-    DEFAULT_FEEDBACK_WEBHOOK_URL,
+    CONF_SPOTIFY_SHOW_URL,
     DEFAULT_LOGO_URL,
     DEFAULT_NOTIFY_SERVICES,
     DEFAULT_RSS_URL,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SPOTIFY_SHOW_URL,
     DOMAIN,
-    SERVICE_SEND_FEEDBACK,
     VERSION,
 )
 from .coordinator import WohnsinnigVernetztCoordinator, normalize_notify_services
 
 PLATFORMS: list[Platform] = [
+    Platform.MEDIA_PLAYER,
     Platform.SENSOR,
     Platform.SELECT,
     Platform.SWITCH,
     Platform.BUTTON,
-    Platform.TEXT,
     Platform.EVENT,
 ]
 
-SEND_FEEDBACK_SCHEMA = vol.Schema(
-    {
-        vol.Required("message"): str,
-        vol.Optional("sender", default=""): str,
-        vol.Optional("episode", default=""): str,
-    }
-)
-
 
 class WohnsinnigVernetztEpisodesView(HomeAssistantView):
-    """Liefert alle Podcast-Episoden und Feedback-Infos als JSON an die Karte."""
+    """Liefert alle Podcast-Episoden und Player-Infos als JSON an die Karte."""
 
     url = f"/api/{DOMAIN}/episodes"
     name = f"api:{DOMAIN}:episodes"
@@ -70,27 +61,31 @@ class WohnsinnigVernetztEpisodesView(HomeAssistantView):
             return self.json(
                 {
                     "title": "Wohnsinnig vernetzt",
-                    "image": "",
+                    "image": DEFAULT_LOGO_URL,
                     "episodes": [],
-                    "feedback_configured": False,
-                    "feedback_fallback_url": "https://www.wohnsinnigvernetzt.de",
+                    "spotify_show_id": "",
+                    "spotify_show_url": "",
+                    "target_entity": BROWSER_TARGET,
+                    "selected_episode_guid": None,
                 }
             )
 
         return self.json(
             {
                 **coordinator.data,
-                "feedback_configured": bool(coordinator.feedback_webhook_url),
-                "feedback_fallback_url": coordinator.feedback_fallback_url,
+                "spotify_show_id": coordinator.spotify_show_id,
+                "spotify_show_url": coordinator.spotify_show_url,
+                "target_entity": coordinator.target_entity,
+                "selected_episode_guid": coordinator.selected_episode_guid,
             }
         )
 
 
-class WohnsinnigVernetztFeedbackView(HomeAssistantView):
-    """Nimmt Feedback aus der Dashboard-Karte entgegen."""
+class WohnsinnigVernetztPlayerStateView(HomeAssistantView):
+    """Synchronisiert Browser-Player-Status zurück an die HA-Media-Player-Entität."""
 
-    url = f"/api/{DOMAIN}/feedback"
-    name = f"api:{DOMAIN}:feedback"
+    url = f"/api/{DOMAIN}/player_state"
+    name = f"api:{DOMAIN}:player_state"
     requires_auth = True
 
     async def post(self, request: web.Request) -> web.Response:
@@ -107,15 +102,11 @@ class WohnsinnigVernetztFeedbackView(HomeAssistantView):
         except ValueError:
             return self.json({"error": "Ungültiges JSON."}, status_code=400)
 
-        try:
-            await coordinator.async_send_feedback(
-                message=str(payload.get("message", "")),
-                sender=str(payload.get("sender", "")),
-                episode=str(payload.get("episode", "")),
-            )
-        except HomeAssistantError as err:
-            return self.json({"error": str(err)}, status_code=400)
-
+        state = str(payload.get("state", "idle"))
+        guid = payload.get("guid")
+        await coordinator.async_sync_browser_state(
+            state=state, guid=str(guid) if guid else None
+        )
         return self.json({"status": "ok"})
 
 
@@ -130,7 +121,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         add_extra_js_url(hass, f"{CARD_URL_BASE}/{CARD_FILENAME}?v={VERSION}")
         hass.http.register_view(WohnsinnigVernetztEpisodesView())
-        hass.http.register_view(WohnsinnigVernetztFeedbackView())
+        hass.http.register_view(WohnsinnigVernetztPlayerStateView())
         domain_data["frontend_registered"] = True
 
     config = {**entry.data, **entry.options}
@@ -147,34 +138,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             config.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
         ),
         logo_url=config.get(CONF_LOGO_URL) or DEFAULT_LOGO_URL,
-        feedback_webhook_url=config.get(
-            CONF_FEEDBACK_WEBHOOK_URL, DEFAULT_FEEDBACK_WEBHOOK_URL
+        spotify_show_url=config.get(
+            CONF_SPOTIFY_SHOW_URL, DEFAULT_SPOTIFY_SHOW_URL
         ),
+        default_target=config.get(CONF_DEFAULT_TARGET, BROWSER_TARGET),
     )
 
     await coordinator.async_config_entry_first_refresh()
     domain_data["coordinator"] = coordinator
     domain_data[entry.entry_id] = coordinator
-
-    if not hass.services.has_service(DOMAIN, SERVICE_SEND_FEEDBACK):
-        async def _handle_send_feedback(call: ServiceCall) -> None:
-            coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
-                DOMAIN, {}
-            ).get("coordinator")
-            if coord is None:
-                raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
-            await coord.async_send_feedback(
-                message=call.data["message"],
-                sender=call.data.get("sender", ""),
-                episode=call.data.get("episode", ""),
-            )
-
-        hass.services.async_register(
-            DOMAIN,
-            SERVICE_SEND_FEEDBACK,
-            _handle_send_feedback,
-            schema=SEND_FEEDBACK_SCHEMA,
-        )
 
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -193,6 +165,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         domain_data = hass.data.get(DOMAIN, {})
         domain_data.pop(entry.entry_id, None)
         domain_data.pop("coordinator", None)
-        if hass.services.has_service(DOMAIN, SERVICE_SEND_FEEDBACK):
-            hass.services.async_remove(DOMAIN, SERVICE_SEND_FEEDBACK)
     return unload_ok
