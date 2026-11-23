@@ -3,11 +3,13 @@
     "step": {
       "user": {
         "title": "Set up Wohnsinnig vernetzt",
-        "description": "Configure the podcast RSS feed and new episode notifications.",
+        "description": "Configure RSS feed, notifications, logo, and feedback endpoint.",
         "data": {
           "rss_url": "Podcast RSS URL",
-          "notify_service": "Notification service (e.g. notify.mobile_app_phone or persistent_notification.create)",
-          "scan_interval": "Update interval (minutes)"
+          "notify_services": "Notification services for new episodes",
+          "scan_interval": "Update interval (minutes)",
+          "logo_url": "Website logo URL (optional, overrides RSS cover)",
+          "feedback_webhook_url": "Feedback webhook URL (optional, e.g. Formspree, n8n, or Discord)"
         }
       }
     },
@@ -21,10 +23,17 @@
         "title": "Wohnsinnig vernetzt Options",
         "data": {
           "rss_url": "Podcast RSS URL",
-          "notify_service": "Notification service",
-          "scan_interval": "Update interval (minutes)"
+          "notify_services": "Notification services for new episodes",
+          "scan_interval": "Update interval (minutes)",
+          "logo_url": "Website logo URL (optional)",
+          "feedback_webhook_url": "Feedback webhook URL (optional)"
         }
       }
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "new_episode": "New podcast episode published"
     }
   }
 }

@@ -1,4 +1,4 @@
-"""Sensor-Entität für Wohnsinnig vernetzt."""
+"""Sensor-Entitäten für Wohnsinnig vernetzt."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import WohnsinnigVernetztCoordinator
+from .entity import WohnsinnigVernetztEntity
 
 
 async def async_setup_entry(
@@ -17,31 +17,26 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Erstellt den Podcast-Sensor."""
+    """Erstellt die Podcast-Sensoren."""
     coordinator: WohnsinnigVernetztCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([WohnsinnigVernetztSensor(coordinator, entry.entry_id)])
+    async_add_entities(
+        [
+            WohnsinnigVernetztLatestSensor(coordinator, entry.entry_id),
+            WohnsinnigVernetztEpisodesSensor(coordinator, entry.entry_id),
+        ]
+    )
 
 
-class WohnsinnigVernetztSensor(
-    CoordinatorEntity[WohnsinnigVernetztCoordinator], SensorEntity
-):
-    """Zeigt die neueste Podcast-Folge und Eckdaten an."""
+class WohnsinnigVernetztLatestSensor(WohnsinnigVernetztEntity, SensorEntity):
+    """Zeigt die neueste Podcast-Folge an."""
 
-    _attr_has_entity_name = True
     _attr_name = "Neueste Folge"
     _attr_icon = "mdi:podcast"
 
     def __init__(
         self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
     ) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{entry_id}_latest_episode"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry_id)},
-            "name": "Wohnsinnig vernetzt",
-            "manufacturer": "Podcast RSS",
-            "model": "Podcast Feed",
-        }
+        super().__init__(coordinator, entry_id, "latest_episode")
 
     @property
     def native_value(self) -> str | None:
@@ -53,6 +48,8 @@ class WohnsinnigVernetztSensor(
     @property
     def entity_picture(self) -> str | None:
         data = self.coordinator.data or {}
+        if self.coordinator.logo_url:
+            return self.coordinator.logo_url
         episodes = data.get("episodes", [])
         if episodes and episodes[0].get("image"):
             return episodes[0]["image"]
@@ -69,4 +66,39 @@ class WohnsinnigVernetztSensor(
             "latest_pub_date": latest.get("pub_date", ""),
             "latest_duration": latest.get("duration", ""),
             "latest_audio_url": latest.get("audio_url", ""),
+        }
+
+
+class WohnsinnigVernetztEpisodesSensor(WohnsinnigVernetztEntity, SensorEntity):
+    """Zeigt die Anzahl und eine vollständige Liste aller Podcast-Folgen."""
+
+    _attr_name = "Alle Folgen"
+    _attr_icon = "mdi:playlist-music"
+    _attr_native_unit_of_measurement = "Folgen"
+    _unrecorded_attributes = frozenset({"episodes"})
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "all_episodes")
+
+    @property
+    def native_value(self) -> int:
+        return len((self.coordinator.data or {}).get("episodes", []))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        episodes = (self.coordinator.data or {}).get("episodes", [])
+        compact = [
+            {
+                "title": ep["title"],
+                "pub_date": ep["pub_date"],
+                "duration": ep["duration"],
+                "audio_url": ep["audio_url"],
+            }
+            for ep in episodes
+        ]
+        return {
+            "total_episodes": len(episodes),
+            "episodes": compact,
         }

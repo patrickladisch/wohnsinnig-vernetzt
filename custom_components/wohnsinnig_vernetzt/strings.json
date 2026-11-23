@@ -3,11 +3,13 @@
     "step": {
       "user": {
         "title": "Wohnsinnig vernetzt einrichten",
-        "description": "RSS-Feed und Benachrichtigungen für neue Podcast-Folgen konfigurieren.",
+        "description": "RSS-Feed, Benachrichtigungen, Logo und Feedback-Endpunkt konfigurieren.",
         "data": {
           "rss_url": "Podcast RSS-URL",
-          "notify_service": "Benachrichtigungsdienst (z. B. notify.mobile_app_handy oder persistent_notification.create)",
-          "scan_interval": "Abrufintervall (Minuten)"
+          "notify_services": "Benachrichtigungsdienste bei neuen Folgen",
+          "scan_interval": "Abrufintervall (Minuten)",
+          "logo_url": "Website-Logo-URL (optional, überschreibt RSS-Cover)",
+          "feedback_webhook_url": "Feedback-Webhook-URL (optional, z. B. Formspree, n8n oder Discord)"
         }
       }
     },
@@ -21,10 +23,17 @@
         "title": "Wohnsinnig vernetzt Optionen",
         "data": {
           "rss_url": "Podcast RSS-URL",
-          "notify_service": "Benachrichtigungsdienst",
-          "scan_interval": "Abrufintervall (Minuten)"
+          "notify_services": "Benachrichtigungsdienste bei neuen Folgen",
+          "scan_interval": "Abrufintervall (Minuten)",
+          "logo_url": "Website-Logo-URL (optional)",
+          "feedback_webhook_url": "Feedback-Webhook-URL (optional)"
         }
       }
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "new_episode": "Neue Podcast-Folge erschienen"
     }
   }
 }
