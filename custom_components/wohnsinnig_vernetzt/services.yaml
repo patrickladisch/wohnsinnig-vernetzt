@@ -15,3 +15,7 @@ import_blueprint:
       default: false
       selector:
         boolean:
+
+mark_episode_seen:
+  name: Neue Folge als gesehen markieren
+  description: Bestätigt die aktuell neueste Folge und setzt den Sensor „Neue Folge verfügbar“ zurück auf NEIN.

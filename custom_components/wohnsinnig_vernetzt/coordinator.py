@@ -225,6 +225,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self._seen_guids: set[str] | None = None
         self.notifications_enabled: bool = True
         self.selected_episode_guid: str | None = None
+        self.acknowledged_latest_guid: str | None = None
+        self.acknowledged_latest_title: str = ""
         self.selected_blueprint_id: str | None = None
         self.target_entity: str = default_target or BROWSER_TARGET
         self.playback_state: str = "idle"
@@ -244,6 +246,10 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 self.notifications_enabled = stored["notifications_enabled"]
             if isinstance(stored.get("selected_episode_guid"), str):
                 self.selected_episode_guid = stored["selected_episode_guid"]
+            if isinstance(stored.get("acknowledged_latest_guid"), str):
+                self.acknowledged_latest_guid = stored["acknowledged_latest_guid"]
+            if isinstance(stored.get("acknowledged_latest_title"), str):
+                self.acknowledged_latest_title = stored["acknowledged_latest_title"]
             if isinstance(stored.get("selected_blueprint_id"), str):
                 self.selected_blueprint_id = stored["selected_blueprint_id"]
             if isinstance(stored.get("target_entity"), str) and stored["target_entity"]:
@@ -264,6 +270,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "guids": list(self._seen_guids or []),
                 "notifications_enabled": self.notifications_enabled,
                 "selected_episode_guid": self.selected_episode_guid,
+                "acknowledged_latest_guid": self.acknowledged_latest_guid,
+                "acknowledged_latest_title": self.acknowledged_latest_title,
                 "selected_blueprint_id": self.selected_blueprint_id,
                 "target_entity": self.target_entity,
                 "notify_services": list(self.notify_services),
@@ -338,6 +346,39 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 if ep["guid"] == self.selected_episode_guid:
                     return idx
         return 0
+
+    def has_newer_episode(self) -> bool:
+        """Prüft, ob eine neuere Folge als die zuletzt bekannte/bestätigte vorliegt."""
+        episodes = self.get_episodes()
+        if not episodes:
+            return False
+        latest = episodes[0]
+        if self.acknowledged_latest_guid:
+            return latest["guid"] != self.acknowledged_latest_guid
+        return False
+
+    def newer_episodes_count(self) -> int:
+        """Zählt, wie viele Folgen neuer als die zuletzt bestätigte sind."""
+        episodes = self.get_episodes()
+        if not episodes or not self.acknowledged_latest_guid:
+            return 0
+        count = 0
+        for ep in episodes:
+            if ep["guid"] == self.acknowledged_latest_guid:
+                break
+            count += 1
+        return count
+
+    async def async_mark_latest_episode_seen(self) -> None:
+        """Markiert die aktuell neueste Folge als bekannt/gesehen (Sensor -> NEIN)."""
+        episodes = self.get_episodes()
+        if not episodes:
+            return
+        latest = episodes[0]
+        self.acknowledged_latest_guid = latest["guid"]
+        self.acknowledged_latest_title = latest["title"]
+        await self._async_save_state()
+        self.async_update_listeners()
 
     async def _async_fetch_blueprints(self, session: aiohttp.ClientSession) -> list[dict]:
         """Lädt die Website (inkl. Scripts/Unterseiten bei Bedarf) und extrahiert alle Blueprints."""
@@ -568,6 +609,9 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
 
         self.selected_episode_guid = ep["guid"]
         self.playback_state = "playing"
+        if episodes and ep["guid"] == episodes[0]["guid"]:
+            self.acknowledged_latest_guid = ep["guid"]
+            self.acknowledged_latest_title = ep["title"]
 
         if self.target_entity != BROWSER_TARGET:
             await self._async_play_on_ha_target(ep)
@@ -638,6 +682,10 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         """Synchronisiert Statusänderungen aus der Dashboard-Karte ohne Rückkopplung."""
         if guid:
             self.selected_episode_guid = guid
+            episodes = self.get_episodes()
+            if state == "playing" and episodes and guid == episodes[0]["guid"]:
+                self.acknowledged_latest_guid = episodes[0]["guid"]
+                self.acknowledged_latest_title = episodes[0]["title"]
         if state in ("playing", "paused", "idle"):
             self.playback_state = state
         await self._async_save_state()
@@ -726,6 +774,23 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         if not episodes:
             return
 
+        if self.acknowledged_latest_guid is None and episodes:
+            # Prüfen, ob sensor.wohnsinnig_vernetzt_neueste_folge bereits einen älteren Titel anzeigt
+            matched_prev = None
+            prev_state = self.hass.states.get("sensor.wohnsinnig_vernetzt_neueste_folge")
+            if prev_state and prev_state.state not in (
+                "unknown",
+                "unavailable",
+                "Keine Folgen gefunden",
+            ):
+                for ep in episodes:
+                    if ep["title"][:255] == prev_state.state:
+                        matched_prev = ep
+                        break
+            baseline = matched_prev or episodes[0]
+            self.acknowledged_latest_guid = baseline["guid"]
+            self.acknowledged_latest_title = baseline["title"]
+
         if self._seen_guids is None:
             self._seen_guids = {ep["guid"] for ep in episodes}
             await self._async_save_state()
@@ -733,6 +798,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
 
         new_episodes = [ep for ep in episodes if ep["guid"] not in self._seen_guids]
         if not new_episodes:
+            await self._async_save_state()
             return
 
         for ep in reversed(new_episodes):

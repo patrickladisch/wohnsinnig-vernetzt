@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
+
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -12,6 +15,43 @@ from .coordinator import WohnsinnigVernetztCoordinator
 from .entity import WohnsinnigVernetztEntity
 from .media_player import get_available_targets
 from .notify_helpers import get_notify_choices
+
+MAX_SELECT_LABEL_LEN = 28
+
+
+def compact_select_label(text: str, max_len: int = MAX_SELECT_LABEL_LEN) -> str:
+    """Kürzt lange Dropdown-Texte sauber, damit das Menü nie über den Kartenrand läuft."""
+    clean = re.sub(r"\s+", " ", (text or "")).strip()
+    if len(clean) <= max_len:
+        return clean
+
+    # Typische Endungen wie " - Teil 1" oder " #12" nach Möglichkeit erhalten
+    suffix_match = re.search(r"(\s[-–]\sTeil\s\d+|\s#\d+)$", clean, re.IGNORECASE)
+    if suffix_match:
+        suffix = suffix_match.group(1)
+        head_budget = max_len - len(suffix) - 1
+        if head_budget >= 10:
+            head = clean[:head_budget].rstrip(" -–:,;")
+            return f"{head}…{suffix}"
+
+    cut = clean[: max_len - 1]
+    if " " in cut and cut.rfind(" ") >= max_len // 2:
+        cut = cut[: cut.rfind(" ")]
+    return cut.rstrip(" -–:,;") + "…"
+
+
+def _dedupe_label(label: str, existing: dict, max_len: int = MAX_SELECT_LABEL_LEN) -> str:
+    """Stellt eindeutige Optionen sicher, ohne die Maximalbreite zu sprengen."""
+    if label not in existing:
+        return label
+    counter = 2
+    while True:
+        suffix = f" ({counter})"
+        trimmed = label[: max(6, max_len - len(suffix))].rstrip(" -–:,;…")
+        candidate = f"{trimmed}{suffix}"
+        if candidate not in existing:
+            return candidate
+        counter += 1
 
 
 async def async_setup_entry(
@@ -32,9 +72,9 @@ async def async_setup_entry(
 
 
 class WohnsinnigVernetztEpisodeSelect(WohnsinnigVernetztEntity, SelectEntity):
-    """Dropdown mit allen Folgen – Auswahl startet direkt den Media Player."""
+    """Dropdown mit allen Folgen – kompakt gekürzt, startet direkt den Media Player."""
 
-    _attr_name = "Folge auswählen & abspielen"
+    _attr_name = "Podcast: Folge wählen"
     _attr_icon = "mdi:play-box-multiple"
 
     def __init__(
@@ -46,15 +86,9 @@ class WohnsinnigVernetztEpisodeSelect(WohnsinnigVernetztEntity, SelectEntity):
         episodes = (self.coordinator.data or {}).get("episodes", [])
         mapping: dict[str, dict] = {}
         for ep in episodes:
-            label = ep["title"][:240]
-            if ep.get("pub_date"):
-                candidate = f"{label} ({ep['pub_date']})"
-            else:
-                candidate = label
-            candidate = candidate[:255]
-            if candidate in mapping:
-                candidate = f"{candidate[:248]} #{len(mapping) + 1}"
-            mapping[candidate] = ep
+            label = compact_select_label(ep["title"], MAX_SELECT_LABEL_LEN)
+            label = _dedupe_label(label, mapping, MAX_SELECT_LABEL_LEN)
+            mapping[label] = ep
         return mapping
 
     @property
@@ -78,7 +112,7 @@ class WohnsinnigVernetztEpisodeSelect(WohnsinnigVernetztEntity, SelectEntity):
     def extra_state_attributes(self) -> dict:
         ep = self.coordinator.get_selected_episode() or {}
         return {
-            "title": ep.get("title", ""),
+            "full_title": ep.get("title", ""),
             "pub_date": ep.get("pub_date", ""),
             "duration": ep.get("duration", ""),
             "audio_url": ep.get("audio_url", ""),
@@ -96,6 +130,7 @@ class WohnsinnigVernetztTargetSelect(WohnsinnigVernetztEntity, SelectEntity):
 
     _attr_name = "Wiedergabe-Gerät"
     _attr_icon = "mdi:speaker-wireless"
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(
         self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
@@ -114,6 +149,10 @@ class WohnsinnigVernetztTargetSelect(WohnsinnigVernetztEntity, SelectEntity):
                 return label
         return BROWSER_TARGET_LABEL
 
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"target_entity": self.coordinator.target_entity}
+
     async def async_select_option(self, option: str) -> None:
         targets = get_available_targets(self.hass)
         target_id = targets.get(option, BROWSER_TARGET)
@@ -123,8 +162,9 @@ class WohnsinnigVernetztTargetSelect(WohnsinnigVernetztEntity, SelectEntity):
 class WohnsinnigVernetztNotifyDeviceSelect(WohnsinnigVernetztEntity, SelectEntity):
     """Wählt das Handy (Companion App) für Push-Benachrichtigungen bei neuen Folgen aus."""
 
-    _attr_name = "Handy für Push-Benachrichtigung"
+    _attr_name = "Push-Gerät (Handy)"
     _attr_icon = "mdi:cellphone-message"
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(
         self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
@@ -132,15 +172,16 @@ class WohnsinnigVernetztNotifyDeviceSelect(WohnsinnigVernetztEntity, SelectEntit
         super().__init__(coordinator, entry_id, "notify_device_select")
 
     def _option_map(self) -> dict[str, str]:
-        """Liefert {Anzeigename: service_id}."""
-        choices = get_notify_choices(self.hass, self.coordinator.notify_services)
+        """Liefert {kompakter Anzeigename: service_id}."""
+        choices = get_notify_choices(
+            self.hass, self.coordinator.notify_services, compact=True
+        )
         mapping: dict[str, str] = {}
         for svc_id, label in choices:
             mapping[label] = svc_id
 
-        # Falls in den Optionen mehrere Ziele gleichzeitig gewählt wurden
         if len(self.coordinator.notify_services) > 1:
-            multi_label = f"📱 Mehrere Ziele ({len(self.coordinator.notify_services)})"
+            multi_label = f"📱 Mehrere ({len(self.coordinator.notify_services)} Ziele)"
             mapping[multi_label] = "__multi__"
         return mapping
 
@@ -184,9 +225,9 @@ class WohnsinnigVernetztNotifyDeviceSelect(WohnsinnigVernetztEntity, SelectEntit
 
 
 class WohnsinnigVernetztBlueprintSelect(WohnsinnigVernetztEntity, SelectEntity):
-    """Dropdown mit allen Blueprints von wohnsinnigvernetzt.de."""
+    """Dropdown mit allen Blueprints von wohnsinnigvernetzt.de (kompakt formatiert)."""
 
-    _attr_name = "Blueprint auswählen"
+    _attr_name = "Blueprint: Auswählen"
     _attr_icon = "mdi:file-download-outline"
 
     def __init__(
@@ -199,9 +240,9 @@ class WohnsinnigVernetztBlueprintSelect(WohnsinnigVernetztEntity, SelectEntity):
         mapping: dict[str, dict] = {}
         for bp in blueprints:
             prefix = "✓ " if bp.get("installed") else ""
-            candidate = f"{prefix}{bp['title']}"[:255]
-            if candidate in mapping:
-                candidate = f"{candidate[:248]} #{len(mapping) + 1}"
+            budget = MAX_SELECT_LABEL_LEN - len(prefix)
+            short_title = compact_select_label(bp["title"], budget)
+            candidate = _dedupe_label(f"{prefix}{short_title}", mapping, MAX_SELECT_LABEL_LEN)
             mapping[candidate] = bp
         return mapping
 
@@ -226,7 +267,7 @@ class WohnsinnigVernetztBlueprintSelect(WohnsinnigVernetztEntity, SelectEntity):
     def extra_state_attributes(self) -> dict:
         bp = self.coordinator.get_selected_blueprint() or {}
         return {
-            "title": bp.get("title", ""),
+            "full_title": bp.get("title", ""),
             "description": bp.get("description", ""),
             "url": bp.get("url", ""),
             "installed": bp.get("installed", False),

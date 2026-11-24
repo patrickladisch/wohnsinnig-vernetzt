@@ -22,7 +22,7 @@ from .entity import WohnsinnigVernetztEntity
 def get_available_targets(
     hass: HomeAssistant, exclude_entity_id: str | None = None
 ) -> dict[str, str]:
-    """Liefert Mapping {Anzeigename: entity_id} für Browser und alle HA-Lautsprecher."""
+    """Liefert Mapping {kompakter Anzeigename: entity_id} für Browser und HA-Lautsprecher."""
     targets: dict[str, str] = {BROWSER_TARGET_LABEL: BROWSER_TARGET}
     for state in sorted(
         hass.states.async_all("media_player"), key=lambda s: s.name.lower()
@@ -31,7 +31,11 @@ def get_available_targets(
             continue
         if state.entity_id.startswith(f"media_player.{DOMAIN}"):
             continue
-        label = f"{state.name} ({state.entity_id})"
+        raw_name = (state.name or state.entity_id).strip()
+        label = raw_name if len(raw_name) <= 26 else raw_name[:25].rstrip() + "…"
+        if label in targets:
+            suffix = f" ({len(targets)})"
+            label = f"{label[: max(6, 26 - len(suffix))].rstrip()}{suffix}"
         targets[label] = state.entity_id
     return targets
 
@@ -49,7 +53,7 @@ async def async_setup_entry(
 class WohnsinnigVernetztMediaPlayer(WohnsinnigVernetztEntity, MediaPlayerEntity):
     """Spielt Podcast-Folgen über den Browser oder einen HA-Lautsprecher ab."""
 
-    _attr_name = "Player"
+    _attr_name = "Podcast: Player"
     _attr_icon = "mdi:podcast"
     _attr_supported_features = (
         MediaPlayerEntityFeature.PLAY

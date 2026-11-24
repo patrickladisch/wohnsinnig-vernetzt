@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v1.4.0
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v1.5.0
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -88,7 +88,16 @@ class WohnsinnigVernetztCard extends HTMLElement {
   _setupAudioEvents() {
     this._audio.addEventListener("timeupdate", () => this._updateProgress());
     this._audio.addEventListener("loadedmetadata", () => this._updateProgress());
-    this._audio.addEventListener("play", () => this._updatePlayIcon());
+    this._audio.addEventListener("play", () => {
+      this._updatePlayIcon();
+      const ep = this._episodes[this._currentIndex];
+      if (this._hass && ep) {
+        this._hass.callApi("POST", "wohnsinnig_vernetzt/player_state", {
+          state: "playing",
+          guid: ep.guid,
+        }).catch(() => {});
+      }
+    });
     this._audio.addEventListener("pause", () => this._updatePlayIcon());
     this._audio.addEventListener("ended", () => this._updatePlayIcon());
   }

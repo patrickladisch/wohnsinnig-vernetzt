@@ -1,9 +1,10 @@
-"""Button-Entitäten für Benachrichtigungstest, Refresh und Blueprint-Import."""
+"""Button-Entitäten für Blueprint-Import, Episoden-Bestätigung, Test und Refresh."""
 
 from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -17,12 +18,13 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Erstellt die Steuerelemente als Buttons."""
+    """Erstellt die Steuerelemente und Diagnose-Buttons."""
     coordinator: WohnsinnigVernetztCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
             WohnsinnigVernetztImportBlueprintButton(coordinator, entry.entry_id),
             WohnsinnigVernetztImportAllBlueprintsButton(coordinator, entry.entry_id),
+            WohnsinnigVernetztMarkSeenButton(coordinator, entry.entry_id),
             WohnsinnigVernetztTestNotifyButton(coordinator, entry.entry_id),
             WohnsinnigVernetztRefreshButton(coordinator, entry.entry_id),
         ]
@@ -32,7 +34,7 @@ async def async_setup_entry(
 class WohnsinnigVernetztImportBlueprintButton(WohnsinnigVernetztEntity, ButtonEntity):
     """Importiert den ausgewählten Blueprint direkt in Home Assistant."""
 
-    _attr_name = "Ausgewählten Blueprint importieren"
+    _attr_name = "Blueprint: Importieren"
     _attr_icon = "mdi:import"
 
     def __init__(
@@ -47,7 +49,7 @@ class WohnsinnigVernetztImportBlueprintButton(WohnsinnigVernetztEntity, ButtonEn
 class WohnsinnigVernetztImportAllBlueprintsButton(WohnsinnigVernetztEntity, ButtonEntity):
     """Importiert alle Blueprints von wohnsinnigvernetzt.de in einem Rutsch."""
 
-    _attr_name = "Alle Blueprints importieren"
+    _attr_name = "Blueprint: Alle importieren"
     _attr_icon = "mdi:download-multiple"
 
     def __init__(
@@ -59,11 +61,27 @@ class WohnsinnigVernetztImportAllBlueprintsButton(WohnsinnigVernetztEntity, Butt
         await self.coordinator.async_import_all_blueprints()
 
 
+class WohnsinnigVernetztMarkSeenButton(WohnsinnigVernetztEntity, ButtonEntity):
+    """Bestätigt die neueste Folge (setzt den Sensor 'Neue Folge verfügbar' auf NEIN)."""
+
+    _attr_name = "Podcast: Neue Folge bestätigen"
+    _attr_icon = "mdi:check-bold"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "mark_episode_seen")
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_mark_latest_episode_seen()
+
+
 class WohnsinnigVernetztTestNotifyButton(WohnsinnigVernetztEntity, ButtonEntity):
     """Schickt sofort eine Test-Benachrichtigung."""
 
     _attr_name = "Test-Benachrichtigung senden"
     _attr_icon = "mdi:bell-check"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(
         self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
@@ -77,8 +95,9 @@ class WohnsinnigVernetztTestNotifyButton(WohnsinnigVernetztEntity, ButtonEntity)
 class WohnsinnigVernetztRefreshButton(WohnsinnigVernetztEntity, ButtonEntity):
     """Aktualisiert Podcast-Feed und Blueprint-Liste sofort."""
 
-    _attr_name = "Folgen & Blueprints aktualisieren"
+    _attr_name = "Feed & Blueprints aktualisieren"
     _attr_icon = "mdi:refresh"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(
         self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str

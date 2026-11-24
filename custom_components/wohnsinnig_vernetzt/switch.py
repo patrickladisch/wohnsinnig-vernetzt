@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -27,8 +28,9 @@ async def async_setup_entry(
 class WohnsinnigVernetztNotifySwitch(WohnsinnigVernetztEntity, SwitchEntity):
     """Schaltet automatische Benachrichtigungen bei neuen Folgen ein oder aus."""
 
-    _attr_name = "Benachrichtigungen bei neuen Folgen"
+    _attr_name = "Benachrichtigungen aktiv"
     _attr_icon = "mdi:bell-ring"
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(
         self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str

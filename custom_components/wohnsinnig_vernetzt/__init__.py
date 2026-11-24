@@ -33,8 +33,13 @@ from .const import (
     DEFAULT_RSS_URL,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SPOTIFY_SHOW_URL,
+    DEVICE_CONFIG_URL,
+    DEVICE_MANUFACTURER,
+    DEVICE_MODEL,
+    DEVICE_NAME,
     DOMAIN,
     SERVICE_IMPORT_BLUEPRINT,
+    SERVICE_MARK_EPISODE_SEEN,
     VERSION,
 )
 from .coordinator import WohnsinnigVernetztCoordinator, normalize_notify_services
@@ -199,10 +204,10 @@ def _sync_device_info(hass: HomeAssistant, entry: ConfigEntry) -> None:
         try:
             dev_reg.async_update_device(
                 device.id,
-                name="Wohnsinnig vernetzt",
-                model="Podcast: Wohnsinnig vernetzt",
-                manufacturer="www.wohnsinnigvernetzt.de",
-                configuration_url="https://www.wohnsinnigvernetzt.de",
+                name=DEVICE_NAME,
+                model=DEVICE_MODEL,
+                manufacturer=DEVICE_MANUFACTURER,
+                configuration_url=DEVICE_CONFIG_URL,
             )
         except TypeError:
             pass
@@ -272,6 +277,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             schema=IMPORT_BLUEPRINT_SCHEMA,
         )
 
+    if not hass.services.has_service(DOMAIN, SERVICE_MARK_EPISODE_SEEN):
+        async def _handle_mark_episode_seen(call: ServiceCall) -> None:
+            coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
+                DOMAIN, {}
+            ).get("coordinator")
+            if coord is None:
+                raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
+            await coord.async_mark_latest_episode_seen()
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_MARK_EPISODE_SEEN,
+            _handle_mark_episode_seen,
+        )
+
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -291,4 +311,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         domain_data.pop("coordinator", None)
         if hass.services.has_service(DOMAIN, SERVICE_IMPORT_BLUEPRINT):
             hass.services.async_remove(DOMAIN, SERVICE_IMPORT_BLUEPRINT)
+        if hass.services.has_service(DOMAIN, SERVICE_MARK_EPISODE_SEEN):
+            hass.services.async_remove(DOMAIN, SERVICE_MARK_EPISODE_SEEN)
     return unload_ok

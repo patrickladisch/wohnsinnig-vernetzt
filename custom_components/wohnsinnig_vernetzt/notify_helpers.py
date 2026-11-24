@@ -42,6 +42,13 @@ def _prettify_mobile_slug(service_name: str) -> str:
     return raw.replace("_", " ").strip().title() or service_name
 
 
+def _truncate_label(text: str, max_len: int = 26) -> str:
+    clean = re.sub(r"\s+", " ", text).strip()
+    if len(clean) <= max_len:
+        return clean
+    return clean[: max_len - 1].rstrip() + "…"
+
+
 def get_mobile_app_services(hass: HomeAssistant) -> list[str]:
     """Gibt alle registrierten notify.mobile_app_* Dienste zurück."""
     notify_domain = hass.services.async_services().get("notify", {})
@@ -53,7 +60,9 @@ def get_mobile_app_services(hass: HomeAssistant) -> list[str]:
 
 
 def get_notify_choices(
-    hass: HomeAssistant, current: list[str] | None = None
+    hass: HomeAssistant,
+    current: list[str] | None = None,
+    compact: bool = False,
 ) -> list[tuple[str, str]]:
     """Liefert eine geordnete Liste von (service_id, anzeigename) für Handys & Notify-Dienste."""
     current = current or []
@@ -62,6 +71,17 @@ def get_notify_choices(
 
     choices: list[tuple[str, str]] = []
     seen: set[str] = set()
+    used_labels: set[str] = set()
+
+    def _add(svc_id: str, label: str) -> None:
+        final_label = _truncate_label(label, 26) if compact else label
+        if final_label in used_labels:
+            suffix = f" ({len(used_labels) + 1})"
+            base_len = max(6, (26 if compact else 80) - len(suffix))
+            final_label = f"{final_label[:base_len].rstrip()}{suffix}"
+        used_labels.add(final_label)
+        choices.append((svc_id, final_label))
+        seen.add(svc_id)
 
     mobile_services = [
         name for name in sorted(notify_domain.keys()) if name.startswith("mobile_app_")
@@ -71,39 +91,41 @@ def get_notify_choices(
     for svc_name in mobile_services:
         full_id = f"notify.{svc_name}"
         friendly = device_names.get(svc_name) or _prettify_mobile_slug(svc_name)
-        choices.append((full_id, f"📱 {friendly} ({full_id})"))
-        seen.add(full_id)
+        label = f"📱 {friendly}" if compact else f"📱 {friendly} ({full_id})"
+        _add(full_id, label)
 
     # 2. Option für alle Handys gemeinsam (sobald mindestens 2 Handys vorhanden sind)
     if len(mobile_services) >= 2:
-        choices.append((NOTIFY_ALL_MOBILE_APPS, "📱 Alle Handys (Companion App)"))
-        seen.add(NOTIFY_ALL_MOBILE_APPS)
+        _add(
+            NOTIFY_ALL_MOBILE_APPS,
+            "📱 Alle Handys" if compact else "📱 Alle Handys (Companion App)",
+        )
 
     # 3. Home Assistant Seitenleiste (persistente Benachrichtigung)
-    choices.append(
-        (
-            "persistent_notification.create",
-            "🔔 Home Assistant Seitenleiste (persistent_notification.create)",
-        )
+    _add(
+        "persistent_notification.create",
+        "🔔 HA Seitenleiste"
+        if compact
+        else "🔔 Home Assistant Seitenleiste (persistent_notification.create)",
     )
-    seen.add("persistent_notification.create")
 
     # 4. Weitere notify-Dienste (z. B. Telegram, Pushover, Mail)
     for svc_name in sorted(notify_domain.keys()):
-        if svc_name in ("send_message", "persistent_notification") or svc_name.startswith("mobile_app_"):
+        if svc_name in ("send_message", "persistent_notification") or svc_name.startswith(
+            "mobile_app_"
+        ):
             continue
         full_id = f"notify.{svc_name}"
         if full_id not in seen:
-            choices.append((full_id, f"📨 {svc_name} ({full_id})"))
-            seen.add(full_id)
+            label = f"📨 {svc_name}" if compact else f"📨 {svc_name} ({full_id})"
+            _add(full_id, label)
 
     # 5. Eventuell bereits konfigurierte benutzerdefinierte Dienste beibehalten
     for svc_id in current:
         if svc_id and svc_id not in seen and svc_id != NOTIFY_NONE:
-            choices.append((svc_id, svc_id))
-            seen.add(svc_id)
+            _add(svc_id, svc_id)
 
     # 6. Deaktiviert-Option für das Geräte-Dropdown
-    choices.append((NOTIFY_NONE, "🔕 Kein Push-Gerät ausgewählt"))
+    _add(NOTIFY_NONE, "🔕 Kein Push" if compact else "🔕 Kein Push-Gerät ausgewählt")
 
     return choices

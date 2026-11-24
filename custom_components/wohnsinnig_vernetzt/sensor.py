@@ -22,6 +22,7 @@ async def async_setup_entry(
     async_add_entities(
         [
             WohnsinnigVernetztLatestSensor(coordinator, entry.entry_id),
+            WohnsinnigVernetztNewEpisodeAvailableSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztEpisodesSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztBlueprintsSensor(coordinator, entry.entry_id),
         ]
@@ -67,6 +68,42 @@ class WohnsinnigVernetztLatestSensor(WohnsinnigVernetztEntity, SensorEntity):
             "latest_pub_date": latest.get("pub_date", ""),
             "latest_duration": latest.get("duration", ""),
             "latest_audio_url": latest.get("audio_url", ""),
+        }
+
+
+class WohnsinnigVernetztNewEpisodeAvailableSensor(
+    WohnsinnigVernetztEntity, SensorEntity
+):
+    """Gibt JA oder NEIN aus, je nachdem ob eine neuere Folge erschienen ist."""
+
+    _attr_name = "Neue Folge verfügbar"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "new_episode_available")
+
+    @property
+    def native_value(self) -> str:
+        return "JA" if self.coordinator.has_newer_episode() else "NEIN"
+
+    @property
+    def icon(self) -> str:
+        return (
+            "mdi:bell-badge"
+            if self.coordinator.has_newer_episode()
+            else "mdi:check-circle-outline"
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        episodes = self.coordinator.get_episodes()
+        latest = episodes[0] if episodes else {}
+        return {
+            "neueste_folge": latest.get("title", ""),
+            "letzte_bekannte_folge": self.coordinator.acknowledged_latest_title,
+            "neue_folgen_anzahl": self.coordinator.newer_episodes_count(),
+            "veroeffentlicht_am": latest.get("pub_date", ""),
         }
 
 
