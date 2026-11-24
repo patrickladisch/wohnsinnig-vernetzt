@@ -1,9 +1,13 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v1.5.0
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v1.5.1
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
+    this._config = {
+      title: "Wohnsinnig vernetzt",
+      show_list_default: true,
+    };
     this._episodes = [];
     this._podcastTitle = "Wohnsinnig vernetzt";
     this._podcastImage = "/wohnsinnig_vernetzt/logo.png";
@@ -11,13 +15,19 @@ class WohnsinnigVernetztCard extends HTMLElement {
     this._listOpen = true;
     this._searchQuery = "";
     this._loaded = false;
+    this._fetching = false;
+    this._lastFetchAttempt = 0;
     this._lastSensorState = null;
     this._loadedTrackUrl = "";
+    this._isBuffering = false;
+    this._statusText = "";
+    this._statusIsError = false;
+    this._lastCommandId = null;
     this._speeds = [1, 1.25, 1.5, 2];
     this._speedIdx = 0;
+
     this._audio = new Audio();
-    // Kein Vorladen vor echtem Play-Klick -> saubere Zählung bei Spotify for Creators
-    this._audio.preload = "none";
+    this._audio.preload = "metadata";
     this._setupAudioEvents();
   }
 
@@ -28,20 +38,47 @@ class WohnsinnigVernetztCard extends HTMLElement {
     };
   }
 
+  connectedCallback() {
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    if (this._hass && !this._loaded && !this._fetching) {
+      this._fetchEpisodes();
+    }
+  }
+
   setConfig(config) {
     this._config = {
       title: "Wohnsinnig vernetzt",
       show_list_default: true,
-      ...config,
+      ...(config || {}),
     };
     this._listOpen = Boolean(this._config.show_list_default);
     if (this.shadowRoot.innerHTML === "") {
       this._renderShell();
     }
+    this._updateUI();
+  }
+
+  _findPlayerEntity(hass) {
+    if (!hass || !hass.states) return null;
+    if (hass.states["media_player.wohnsinnig_vernetzt_player"]) {
+      return hass.states["media_player.wohnsinnig_vernetzt_player"];
+    }
+    return Object.values(hass.states).find(
+      (s) =>
+        s.entity_id.startsWith("media_player.wohnsinnig_vernetzt") &&
+        s.attributes &&
+        "play_command_id" in s.attributes
+    );
   }
 
   set hass(hass) {
     this._hass = hass;
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+
     const sensor =
       hass.states["sensor.wohnsinnig_vernetzt_neueste_folge"] ||
       Object.values(hass.states).find(
@@ -52,10 +89,36 @@ class WohnsinnigVernetztCard extends HTMLElement {
       );
     const sensorState = sensor ? sensor.state : null;
 
-    if (!this._loaded || (sensorState && sensorState !== this._lastSensorState)) {
+    const now = Date.now();
+    const shouldRetryEmpty =
+      !this._loaded && !this._fetching && now - this._lastFetchAttempt > 5000;
+    const sensorChanged =
+      Boolean(sensorState) && sensorState !== this._lastSensorState;
+
+    if (shouldRetryEmpty || (sensorChanged && !this._fetching)) {
       this._lastSensorState = sensorState;
-      this._loaded = true;
       this._fetchEpisodes();
+    }
+
+    // Optionaler Sync: Wenn am Gerät "Dashboard-Browser" als Ziel gewählt ist und
+    // dort eine Folge gestartet/pausiert wird, reagiert der Dashboard-Player mit.
+    const player = this._findPlayerEntity(hass);
+    if (player && player.attributes) {
+      const targetEntity = player.attributes.target_entity || "__browser__";
+      const cmdId = player.attributes.play_command_id;
+      const action = player.attributes.last_command_action;
+      const selectedGuid = player.attributes.selected_guid;
+
+      if (this._lastCommandId === null) {
+        this._lastCommandId = cmdId;
+      } else if (
+        targetEntity === "__browser__" &&
+        cmdId !== undefined &&
+        cmdId !== this._lastCommandId
+      ) {
+        this._lastCommandId = cmdId;
+        this._handleRemoteCommand(action, selectedGuid);
+      }
     }
   }
 
@@ -64,13 +127,20 @@ class WohnsinnigVernetztCard extends HTMLElement {
   }
 
   async _fetchEpisodes() {
-    if (!this._hass) return;
+    if (!this._hass || this._fetching) return;
+    this._fetching = true;
+    this._lastFetchAttempt = Date.now();
     try {
       const data = await this._hass.callApi("GET", "wohnsinnig_vernetzt/episodes");
       const currentGuid = this._episodes[this._currentIndex]?.guid;
-      this._podcastTitle = this._config.title || data.title || "Wohnsinnig vernetzt";
+      this._podcastTitle =
+        (this._config && this._config.title) || data.title || "Wohnsinnig vernetzt";
       this._podcastImage = data.image || "/wohnsinnig_vernetzt/logo.png";
-      this._episodes = data.episodes || [];
+      this._episodes = Array.isArray(data.episodes) ? data.episodes : [];
+
+      if (this._episodes.length > 0) {
+        this._loaded = true;
+      }
 
       if (currentGuid) {
         const idx = this._episodes.findIndex((e) => e.guid === currentGuid);
@@ -79,27 +149,77 @@ class WohnsinnigVernetztCard extends HTMLElement {
         this._currentIndex = 0;
       }
 
+      this._setStatus("", false);
       this._updateUI();
     } catch (err) {
-      this._showError("Podcast-Folgen konnten nicht geladen werden.");
+      this._setStatus("Folgen konnten nicht geladen werden.", true);
+      this._updateUI();
+    } finally {
+      this._fetching = false;
     }
   }
 
   _setupAudioEvents() {
     this._audio.addEventListener("timeupdate", () => this._updateProgress());
     this._audio.addEventListener("loadedmetadata", () => this._updateProgress());
-    this._audio.addEventListener("play", () => {
+    this._audio.addEventListener("waiting", () => {
+      this._isBuffering = true;
+      this._setStatus("Lade Audio…", false);
       this._updatePlayIcon();
-      const ep = this._episodes[this._currentIndex];
-      if (this._hass && ep) {
-        this._hass.callApi("POST", "wohnsinnig_vernetzt/player_state", {
-          state: "playing",
-          guid: ep.guid,
-        }).catch(() => {});
+    });
+    this._audio.addEventListener("canplay", () => {
+      if (this._isBuffering) {
+        this._isBuffering = false;
+        this._setStatus("", false);
+        this._updatePlayIcon();
       }
     });
-    this._audio.addEventListener("pause", () => this._updatePlayIcon());
-    this._audio.addEventListener("ended", () => this._updatePlayIcon());
+    this._audio.addEventListener("playing", () => {
+      this._isBuffering = false;
+      this._setStatus("", false);
+      this._updatePlayIcon();
+    });
+    this._audio.addEventListener("play", () => {
+      this._updatePlayIcon();
+      this._syncStateToHA("playing");
+    });
+    this._audio.addEventListener("pause", () => {
+      this._isBuffering = false;
+      this._updatePlayIcon();
+      this._syncStateToHA("paused");
+    });
+    this._audio.addEventListener("ended", () => {
+      this._isBuffering = false;
+      this._updatePlayIcon();
+      this._syncStateToHA("idle");
+    });
+    this._audio.addEventListener("error", () => {
+      if (!this._loadedTrackUrl) return;
+      this._isBuffering = false;
+      this._setStatus("Audio-Stream konnte im Browser nicht geladen werden.", true);
+      this._updatePlayIcon();
+    });
+  }
+
+  _syncStateToHA(state) {
+    const ep = this._episodes[this._currentIndex];
+    if (!this._hass || !ep) return;
+    this._hass
+      .callApi("POST", "wohnsinnig_vernetzt/player_state", {
+        state,
+        guid: ep.guid,
+      })
+      .catch(() => {});
+  }
+
+  _setStatus(text, isError) {
+    this._statusText = text || "";
+    this._statusIsError = Boolean(isError);
+    const el = this.shadowRoot && this.shadowRoot.getElementById("player-status");
+    if (!el) return;
+    el.textContent = this._statusText;
+    el.className = `player-status ${this._statusIsError ? "error" : ""}`;
+    el.style.display = this._statusText ? "block" : "none";
   }
 
   _formatTime(sec) {
@@ -116,19 +236,64 @@ class WohnsinnigVernetztCard extends HTMLElement {
 
   _selectEpisode(index) {
     if (index < 0 || index >= this._episodes.length) return;
-    const ep = this._episodes[index];
     const isDifferent = this._currentIndex !== index;
     this._currentIndex = index;
 
     if (isDifferent) {
-      this._audio.pause();
-      this._audio.currentTime = 0;
+      if (!this._audio.paused) {
+        this._audio.pause();
+      }
+      this._isBuffering = false;
       this._loadedTrackUrl = "";
-      this._audio.removeAttribute("src");
-      this._audio.load();
+      this._setStatus("", false);
     }
 
     this._updateUI();
+  }
+
+  _playCurrentEpisode() {
+    if (!this._episodes.length) return;
+    const ep = this._episodes[this._currentIndex];
+    if (!ep || !ep.audio_url) {
+      this._setStatus("Für diese Folge liegt keine Audio-URL vor.", true);
+      return;
+    }
+
+    const trackChanged = this._loadedTrackUrl !== ep.audio_url;
+    if (trackChanged) {
+      this._loadedTrackUrl = ep.audio_url;
+      this._audio.src = ep.audio_url;
+      this._audio.load();
+    }
+
+    this._audio.playbackRate = this._speeds[this._speedIdx];
+    this._isBuffering = true;
+    this._setStatus("Starte Wiedergabe…", false);
+    this._updatePlayIcon();
+
+    const playPromise = this._audio.play();
+    if (playPromise && typeof playPromise.then === "function") {
+      playPromise
+        .then(() => {
+          this._isBuffering = false;
+          this._setStatus("", false);
+          this._updatePlayIcon();
+        })
+        .catch((err) => {
+          this._isBuffering = false;
+          if (err && err.name === "NotAllowedError") {
+            this._setStatus("Autoplay blockiert – bitte einmal auf Play tippen.", false);
+          } else if (err && err.name === "AbortError") {
+            this._setStatus("", false);
+          } else {
+            this._setStatus(
+              "Wiedergabe fehlgeschlagen. Bitte erneut auf Play tippen.",
+              true
+            );
+          }
+          this._updatePlayIcon();
+        });
+    }
   }
 
   _togglePlay() {
@@ -136,21 +301,42 @@ class WohnsinnigVernetztCard extends HTMLElement {
     const ep = this._episodes[this._currentIndex];
     if (!ep || !ep.audio_url) return;
 
-    if (this._loadedTrackUrl !== ep.audio_url) {
-      this._loadedTrackUrl = ep.audio_url;
-      this._audio.src = ep.audio_url;
-      this._audio.playbackRate = this._speeds[this._speedIdx];
+    const isSameLoaded = this._loadedTrackUrl === ep.audio_url;
+    if (isSameLoaded && !this._audio.paused) {
+      this._audio.pause();
+    } else {
+      this._playCurrentEpisode();
+    }
+  }
+
+  _handleRemoteCommand(action, guid) {
+    if (guid && this._episodes.length) {
+      const idx = this._episodes.findIndex((e) => e.guid === guid);
+      if (idx >= 0) {
+        this._currentIndex = idx;
+      }
     }
 
-    if (this._audio.paused) {
-      this._audio.playbackRate = this._speeds[this._speedIdx];
-      this._audio.play().catch(() => {});
-    } else {
+    if (action === "play") {
+      this._updateUI();
+      this._playCurrentEpisode();
+    } else if (action === "pause") {
       this._audio.pause();
+      this._updateUI();
+    } else if (action === "stop") {
+      this._audio.pause();
+      if (this._loadedTrackUrl) {
+        try {
+          this._audio.currentTime = 0;
+        } catch (_) {}
+      }
+      this._updateUI();
     }
   }
 
   _skip(seconds) {
+    const ep = this._episodes[this._currentIndex];
+    if (!ep || this._loadedTrackUrl !== ep.audio_url) return;
     if (!Number.isFinite(this._audio.duration)) return;
     this._audio.currentTime = Math.min(
       Math.max(0, this._audio.currentTime + seconds),
@@ -168,9 +354,13 @@ class WohnsinnigVernetztCard extends HTMLElement {
   _updatePlayIcon() {
     const btn = this.shadowRoot.getElementById("play-btn");
     if (!btn) return;
-    btn.innerHTML = this._audio.paused
-      ? `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`
-      : `<svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>`;
+    const ep = this._episodes[this._currentIndex];
+    const isPlayingCurrent =
+      ep && this._loadedTrackUrl === ep.audio_url && !this._audio.paused;
+
+    btn.innerHTML = isPlayingCurrent
+      ? `<svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>`
+      : `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
   }
 
   _updateProgress() {
@@ -181,19 +371,18 @@ class WohnsinnigVernetztCard extends HTMLElement {
 
     const ep = this._episodes[this._currentIndex];
     const isLoaded = ep && this._loadedTrackUrl === ep.audio_url;
-    const duration = isLoaded && Number.isFinite(this._audio.duration) ? this._audio.duration : 0;
-    const current = isLoaded && Number.isFinite(this._audio.currentTime) ? this._audio.currentTime : 0;
+    const duration =
+      isLoaded && Number.isFinite(this._audio.duration) ? this._audio.duration : 0;
+    const current =
+      isLoaded && Number.isFinite(this._audio.currentTime)
+        ? this._audio.currentTime
+        : 0;
 
     bar.max = duration || 100;
     bar.value = current;
     cur.textContent = this._formatTime(current);
     dur.textContent =
       duration > 0 ? this._formatTime(duration) : ep?.duration || "0:00";
-  }
-
-  _showError(msg) {
-    const titleEl = this.shadowRoot.getElementById("ep-title");
-    if (titleEl) titleEl.textContent = msg;
   }
 
   _renderEpisodeList() {
@@ -210,7 +399,9 @@ class WohnsinnigVernetztCard extends HTMLElement {
     if (!filtered.length) {
       const empty = document.createElement("div");
       empty.className = "empty-hint";
-      empty.textContent = "Keine passende Folge gefunden.";
+      empty.textContent = this._episodes.length
+        ? "Keine passende Folge gefunden."
+        : "Noch keine Folgen geladen.";
       listWrap.appendChild(empty);
       return;
     }
@@ -241,6 +432,8 @@ class WohnsinnigVernetztCard extends HTMLElement {
   }
 
   _updateUI() {
+    if (!this.shadowRoot || this.shadowRoot.innerHTML === "") return;
+
     const ep = this._episodes[this._currentIndex];
     const cover = this.shadowRoot.getElementById("cover");
     const podcastLabel = this.shadowRoot.getElementById("podcast-label");
@@ -252,7 +445,15 @@ class WohnsinnigVernetztCard extends HTMLElement {
     if (podcastLabel) podcastLabel.textContent = this._podcastTitle;
 
     if (!ep) {
-      if (epTitle) epTitle.textContent = "Keine Folgen verfügbar";
+      if (epTitle) {
+        epTitle.textContent = this._fetching
+          ? "Lade Folgen…"
+          : "Keine Folgen verfügbar";
+      }
+      if (epMeta) epMeta.textContent = "";
+      this._renderEpisodeList();
+      this._updatePlayIcon();
+      this._updateProgress();
       return;
     }
 
@@ -324,6 +525,20 @@ class WohnsinnigVernetztCard extends HTMLElement {
         .ep-meta {
           font-size: 12px;
           color: var(--secondary-text-color);
+        }
+        .player-status {
+          display: none;
+          margin-top: 8px;
+          padding: 6px 10px;
+          border-radius: 8px;
+          font-size: 12px;
+          background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.14);
+          color: var(--primary-color);
+          text-align: center;
+        }
+        .player-status.error {
+          background: rgba(219, 68, 55, 0.14);
+          color: var(--error-color, #db4437);
         }
         .progress-wrap {
           display: flex;
@@ -467,6 +682,8 @@ class WohnsinnigVernetztCard extends HTMLElement {
           </div>
         </div>
 
+        <div id="player-status" class="player-status"></div>
+
         <div class="progress-wrap">
           <span id="time-current">0:00</span>
           <input id="progress" type="range" min="0" max="100" value="0" />
@@ -496,7 +713,8 @@ class WohnsinnigVernetztCard extends HTMLElement {
     this.shadowRoot.getElementById("fwd-btn").addEventListener("click", () => this._skip(30));
     this.shadowRoot.getElementById("speed-btn").addEventListener("click", () => this._cycleSpeed());
     this.shadowRoot.getElementById("progress").addEventListener("input", (e) => {
-      if (this._loadedTrackUrl) {
+      const ep = this._episodes[this._currentIndex];
+      if (ep && this._loadedTrackUrl === ep.audio_url) {
         this._audio.currentTime = Number(e.target.value);
       }
     });
@@ -517,6 +735,7 @@ class WohnsinnigVernetztBlueprintsCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
+    this._config = { title: "Wohnsinnig vernetzt Blueprints" };
     this._blueprints = [];
     this._searchQuery = "";
     this._statusMsg = "";
@@ -531,10 +750,16 @@ class WohnsinnigVernetztBlueprintsCard extends HTMLElement {
     return { title: "Wohnsinnig vernetzt Blueprints" };
   }
 
+  connectedCallback() {
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+  }
+
   setConfig(config) {
     this._config = {
       title: "Wohnsinnig vernetzt Blueprints",
-      ...config,
+      ...(config || {}),
     };
     if (this.shadowRoot.innerHTML === "") {
       this._renderShell();
