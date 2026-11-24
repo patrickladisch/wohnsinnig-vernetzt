@@ -1,7 +1,7 @@
 """Konstanten für Wohnsinnig vernetzt."""
 
 DOMAIN = "wohnsinnig_vernetzt"
-VERSION = "1.3.2"
+VERSION = "1.4.0"
 
 DEFAULT_RSS_URL = "https://anchor.fm/s/111a8abd0/podcast/rss"
 DEFAULT_BLUEPRINTS_URL = "https://www.wohnsinnigvernetzt.de/"
@@ -19,6 +19,9 @@ CONF_DEFAULT_TARGET = "default_target"
 
 DEFAULT_NOTIFY_SERVICES = ["persistent_notification.create"]
 DEFAULT_SCAN_INTERVAL = 30  # Minuten
+
+NOTIFY_ALL_MOBILE_APPS = "__all_mobile_apps__"
+NOTIFY_NONE = "__none__"
 
 BROWSER_TARGET = "__browser__"
 BROWSER_TARGET_LABEL = "Dashboard-Browser (Karte)"

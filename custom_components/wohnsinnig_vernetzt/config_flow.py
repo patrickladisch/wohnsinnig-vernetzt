@@ -23,33 +23,31 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SPOTIFY_SHOW_URL,
     DOMAIN,
+    NOTIFY_NONE,
 )
 from .coordinator import normalize_notify_services
+from .notify_helpers import get_mobile_app_services, get_notify_choices
 
 
-def _get_notify_options(hass: HomeAssistant, current: list[str]) -> list[str]:
-    """Sammelt alle verfügbaren Benachrichtigungsdienste aus Home Assistant."""
-    options = ["persistent_notification.create"]
-    notify_domain = hass.services.async_services().get("notify", {})
-    for service_name in sorted(notify_domain.keys()):
-        if service_name == "send_message":
-            continue
-        full = f"notify.{service_name}"
-        if full not in options:
-            options.append(full)
-    for item in current:
-        if item not in options:
-            options.append(item)
-    return options
-
-
-def _build_schema(hass: HomeAssistant, defaults: dict) -> vol.Schema:
+def _build_schema(hass: HomeAssistant, defaults: dict, is_initial: bool = False) -> vol.Schema:
     raw_notify = defaults.get(
         CONF_NOTIFY_SERVICES,
-        defaults.get(CONF_NOTIFY_SERVICE, DEFAULT_NOTIFY_SERVICES),
+        defaults.get(CONF_NOTIFY_SERVICE),
     )
-    current_notify = normalize_notify_services(raw_notify)
-    notify_options = _get_notify_options(hass, current_notify)
+    if raw_notify is None:
+        if is_initial:
+            mobile_apps = get_mobile_app_services(hass)
+            current_notify = [mobile_apps[0]] if mobile_apps else list(DEFAULT_NOTIFY_SERVICES)
+        else:
+            current_notify = list(DEFAULT_NOTIFY_SERVICES)
+    else:
+        current_notify = normalize_notify_services(raw_notify)
+
+    choices = [
+        selector.SelectOptionDict(value=svc_id, label=label)
+        for svc_id, label in get_notify_choices(hass, current_notify)
+        if svc_id != NOTIFY_NONE
+    ]
 
     return vol.Schema(
         {
@@ -57,20 +55,20 @@ def _build_schema(hass: HomeAssistant, defaults: dict) -> vol.Schema:
                 CONF_RSS_URL, default=defaults.get(CONF_RSS_URL, DEFAULT_RSS_URL)
             ): str,
             vol.Optional(
-                CONF_BLUEPRINTS_URL,
-                default=defaults.get(CONF_BLUEPRINTS_URL) or DEFAULT_BLUEPRINTS_URL,
-            ): str,
-            vol.Optional(
                 CONF_NOTIFY_SERVICES,
                 default=current_notify,
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
-                    options=notify_options,
+                    options=choices,
                     multiple=True,
                     custom_value=True,
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
+            vol.Optional(
+                CONF_BLUEPRINTS_URL,
+                default=defaults.get(CONF_BLUEPRINTS_URL) or DEFAULT_BLUEPRINTS_URL,
+            ): str,
             vol.Required(
                 CONF_SCAN_INTERVAL,
                 default=defaults.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
@@ -106,7 +104,7 @@ class WohnsinnigVernetztConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=_build_schema(self.hass, {}),
+            data_schema=_build_schema(self.hass, {}, is_initial=True),
         )
 
     @staticmethod
@@ -123,7 +121,12 @@ class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=user_input)
 
         current = {**self.config_entry.data, **self.config_entry.options}
+        # Aktuellen Stand aus dem Coordinator berücksichtigen, falls am Gerät ein Handy gewählt wurde
+        coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+        if coordinator is not None:
+            current[CONF_NOTIFY_SERVICES] = list(coordinator.notify_services)
+
         return self.async_show_form(
             step_id="init",
-            data_schema=_build_schema(self.hass, current),
+            data_schema=_build_schema(self.hass, current, is_initial=False),
         )

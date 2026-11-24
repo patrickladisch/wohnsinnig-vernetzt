@@ -377,7 +377,10 @@ class _BlueprintHTMLTreeParser(HTMLParser):
 
             hits = _extract_urls_from_text_blob(attr_val, self.base_url)
 
-            if len(hits) > 1 or attr_name in ("x-data", "x-init"):
+            # Enthält ein Attribut mehrere URLs (z. B. Blueprint-Array in x-data) -> als JS-Blob auswerten.
+            # Enthält x-data genau EINE URL (wie auf wohnsinnigvernetzt.de pro Karte), am DOM-Node registrieren,
+            # damit <h4>-Titel und <p>-Beschreibung direkt aus der Karte gelesen werden!
+            if len(hits) > 1:
                 self.js_blobs.append(attr_val)
                 continue
 

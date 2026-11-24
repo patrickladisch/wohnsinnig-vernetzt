@@ -34,10 +34,13 @@ from .const import (
     DOMAIN,
     EVENT_BLUEPRINT_IMPORTED,
     EVENT_NEW_EPISODE,
+    NOTIFY_ALL_MOBILE_APPS,
+    NOTIFY_NONE,
     SIGNAL_NEW_EPISODE,
     STORAGE_KEY,
     STORAGE_VERSION,
 )
+from .notify_helpers import get_mobile_app_services
 
 _LOGGER = logging.getLogger(__name__)
 ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"
@@ -215,7 +218,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.logo_url = logo_url.strip()
         self.spotify_show_url = spotify_show_url.strip()
         self.spotify_show_id = extract_spotify_show_id(self.spotify_show_url)
-        self.notify_services = notify_services
+        self._config_notify_services = list(notify_services)
+        self.notify_services = list(notify_services)
 
         self._store: Store[dict] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._seen_guids: set[str] | None = None
@@ -244,6 +248,14 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 self.selected_blueprint_id = stored["selected_blueprint_id"]
             if isinstance(stored.get("target_entity"), str) and stored["target_entity"]:
                 self.target_entity = stored["target_entity"]
+            # Wenn Optionen im Config-Flow unverändert sind, das am Gerät gewählte Handy beibehalten
+            stored_last_cfg = stored.get("last_config_notify_services")
+            stored_notify = stored.get("notify_services")
+            if (
+                isinstance(stored_notify, list)
+                and stored_last_cfg == self._config_notify_services
+            ):
+                self.notify_services = [str(s) for s in stored_notify if s]
         self._state_loaded = True
 
     async def _async_save_state(self) -> None:
@@ -254,12 +266,23 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "selected_episode_guid": self.selected_episode_guid,
                 "selected_blueprint_id": self.selected_blueprint_id,
                 "target_entity": self.target_entity,
+                "notify_services": list(self.notify_services),
+                "last_config_notify_services": list(self._config_notify_services),
             }
         )
 
     async def async_set_notifications_enabled(self, enabled: bool) -> None:
         """Aktiviert oder deaktiviert Benachrichtigungen persistent."""
         self.notifications_enabled = enabled
+        await self._async_save_state()
+        self.async_update_listeners()
+
+    async def async_set_notify_target(self, service_id: str) -> None:
+        """Speichert das ausgewählte Handy bzw. Benachrichtigungsziel persistent."""
+        if not service_id or service_id == NOTIFY_NONE:
+            self.notify_services = []
+        else:
+            self.notify_services = [service_id]
         await self._async_save_state()
         self.async_update_listeners()
 
@@ -721,23 +744,55 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
 
         await self._async_save_state()
 
+    def _resolve_active_notify_services(self) -> list[str]:
+        """Löst NOTIFY_ALL_MOBILE_APPS in konkrete notify.mobile_app_* Dienste auf."""
+        resolved: list[str] = []
+        for svc in self.notify_services:
+            if not svc or svc == NOTIFY_NONE:
+                continue
+            if svc == NOTIFY_ALL_MOBILE_APPS:
+                for m_svc in get_mobile_app_services(self.hass):
+                    if m_svc not in resolved:
+                        resolved.append(m_svc)
+            elif svc not in resolved:
+                resolved.append(svc)
+        return resolved
+
     async def async_send_notification(
         self, episode: dict, is_test: bool = False
     ) -> None:
-        """Sendet eine Benachrichtigung über alle konfigurierten Dienste."""
-        services = self.notify_services or ["persistent_notification.create"]
+        """Sendet eine Push-Benachrichtigung an alle ausgewählten Handys / Dienste."""
+        services = self._resolve_active_notify_services()
+        if not services:
+            if is_test:
+                services = ["persistent_notification.create"]
+            else:
+                return
+
         prefix = "[Test] " if is_test else ""
         duration_part = f" ({episode['duration']})" if episode.get("duration") else ""
-        payload = {
-            "title": f"{prefix}Neue Folge: Wohnsinnig vernetzt",
-            "message": f"{episode['title']}{duration_part}",
-        }
+        title = f"{prefix}🎙️ Neue Folge: Wohnsinnig vernetzt"
+        message = f"{episode['title']}{duration_part}"
+        ep_link = episode.get("link") or "https://www.wohnsinnigvernetzt.de"
 
         for svc in services:
             if "." in svc:
                 domain, service = svc.split(".", 1)
             else:
                 domain, service = "notify", svc
+
+            payload: dict = {
+                "title": title,
+                "message": message,
+            }
+            # Für Companion-App-Handys direkt anklickbare Push-Daten anhängen
+            if domain == "notify" and service.startswith("mobile_app_"):
+                payload["data"] = {
+                    "clickAction": ep_link,
+                    "url": ep_link,
+                    "tag": "wohnsinnig_vernetzt_new_episode",
+                }
+
             try:
                 await self.hass.services.async_call(
                     domain, service, payload, blocking=False

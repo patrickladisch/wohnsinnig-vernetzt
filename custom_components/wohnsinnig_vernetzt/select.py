@@ -1,4 +1,4 @@
-"""Select-Entitäten für Episodenwahl, Wiedergabe-Gerät und Blueprint-Auswahl."""
+"""Select-Entitäten für Episodenwahl, Wiedergabe-Gerät, Push-Handy und Blueprint-Auswahl."""
 
 from __future__ import annotations
 
@@ -7,10 +7,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import BROWSER_TARGET, BROWSER_TARGET_LABEL, DOMAIN
+from .const import BROWSER_TARGET, BROWSER_TARGET_LABEL, DOMAIN, NOTIFY_NONE
 from .coordinator import WohnsinnigVernetztCoordinator
 from .entity import WohnsinnigVernetztEntity
 from .media_player import get_available_targets
+from .notify_helpers import get_notify_choices
 
 
 async def async_setup_entry(
@@ -18,12 +19,13 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Erstellt die Auswahlmenüs für Folgen, Wiedergabe-Gerät und Blueprints."""
+    """Erstellt die Auswahlmenüs für Folgen, Wiedergabe-Gerät, Handy-Push und Blueprints."""
     coordinator: WohnsinnigVernetztCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
             WohnsinnigVernetztEpisodeSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztTargetSelect(coordinator, entry.entry_id),
+            WohnsinnigVernetztNotifyDeviceSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztBlueprintSelect(coordinator, entry.entry_id),
         ]
     )
@@ -116,6 +118,69 @@ class WohnsinnigVernetztTargetSelect(WohnsinnigVernetztEntity, SelectEntity):
         targets = get_available_targets(self.hass)
         target_id = targets.get(option, BROWSER_TARGET)
         await self.coordinator.async_set_target_entity(target_id)
+
+
+class WohnsinnigVernetztNotifyDeviceSelect(WohnsinnigVernetztEntity, SelectEntity):
+    """Wählt das Handy (Companion App) für Push-Benachrichtigungen bei neuen Folgen aus."""
+
+    _attr_name = "Handy für Push-Benachrichtigung"
+    _attr_icon = "mdi:cellphone-message"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "notify_device_select")
+
+    def _option_map(self) -> dict[str, str]:
+        """Liefert {Anzeigename: service_id}."""
+        choices = get_notify_choices(self.hass, self.coordinator.notify_services)
+        mapping: dict[str, str] = {}
+        for svc_id, label in choices:
+            mapping[label] = svc_id
+
+        # Falls in den Optionen mehrere Ziele gleichzeitig gewählt wurden
+        if len(self.coordinator.notify_services) > 1:
+            multi_label = f"📱 Mehrere Ziele ({len(self.coordinator.notify_services)})"
+            mapping[multi_label] = "__multi__"
+        return mapping
+
+    @property
+    def options(self) -> list[str]:
+        return list(self._option_map().keys())
+
+    @property
+    def current_option(self) -> str | None:
+        mapping = self._option_map()
+        active = self.coordinator.notify_services
+        if not active:
+            for label, svc_id in mapping.items():
+                if svc_id == NOTIFY_NONE:
+                    return label
+            return next(iter(mapping.keys()), None)
+
+        if len(active) > 1:
+            for label, svc_id in mapping.items():
+                if svc_id == "__multi__":
+                    return label
+
+        target = active[0]
+        for label, svc_id in mapping.items():
+            if svc_id == target:
+                return label
+        return next(iter(mapping.keys()), None)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "active_notify_services": self.coordinator.notify_services,
+        }
+
+    async def async_select_option(self, option: str) -> None:
+        mapping = self._option_map()
+        svc_id = mapping.get(option)
+        if not svc_id or svc_id == "__multi__":
+            return
+        await self.coordinator.async_set_notify_target(svc_id)
 
 
 class WohnsinnigVernetztBlueprintSelect(WohnsinnigVernetztEntity, SelectEntity):
