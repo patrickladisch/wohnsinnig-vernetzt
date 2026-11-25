@@ -195,6 +195,26 @@ class WohnsinnigVernetztImportBlueprintView(HomeAssistantView):
             return self.json({"error": str(err)}, status_code=400)
 
 
+class WohnsinnigVernetztBatteryCheckView(HomeAssistantView):
+    """Führt beim Klick in der Dashboard-Karte sofort einen Live-Batterie-Check aus."""
+
+    url = f"/api/{DOMAIN}/battery_check"
+    name = f"api:{DOMAIN}:battery_check"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        domain_data = hass.data.get(DOMAIN, {})
+        coordinator: WohnsinnigVernetztCoordinator | None = domain_data.get(
+            "coordinator"
+        )
+        if coordinator is None:
+            return self.json({"error": "Integration nicht geladen."}, status_code=503)
+
+        result = await coordinator.async_run_battery_check(notify=False)
+        return self.json(result)
+
+
 LEGACY_ENTITY_UNIQUE_ID_SUFFIXES = (
     "_send_feedback",
     "_feedback_message",
@@ -248,6 +268,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(WohnsinnigVernetztEpisodesView())
         hass.http.register_view(WohnsinnigVernetztPlayerStateView())
         hass.http.register_view(WohnsinnigVernetztImportBlueprintView())
+        hass.http.register_view(WohnsinnigVernetztBatteryCheckView())
         domain_data["frontend_registered"] = True
 
     config = {**entry.data, **entry.options}

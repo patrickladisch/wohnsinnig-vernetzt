@@ -265,6 +265,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.blueprints_last_error: str | None = None
         self.battery_check_result: dict = {
             "status": "Ausstehend",
+            "summary_text": "Prüfung ausstehend",
             "low_battery_count": 0,
             "battery_threshold": self.battery_threshold,
             "checked_at": "",

@@ -67,6 +67,7 @@ async def async_setup_entry(
             WohnsinnigVernetztTargetSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztNotifyDeviceSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztBlueprintSelect(coordinator, entry.entry_id),
+            WohnsinnigVernetztBatteryListSelect(coordinator, entry.entry_id),
         ]
     )
 
@@ -279,3 +280,75 @@ class WohnsinnigVernetztBlueprintSelect(WohnsinnigVernetztEntity, SelectEntity):
         bp = mapping.get(option)
         if bp:
             await self.coordinator.async_set_selected_blueprint(bp["id"])
+
+
+class WohnsinnigVernetztBatteryListSelect(WohnsinnigVernetztEntity, SelectEntity):
+    """1-Klick-Dropdown direkt auf der Geräteseite mit allen Batterien unter 15 %."""
+
+    _attr_name = "Batterie: Schwache Geräte"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "battery_low_list")
+
+    @property
+    def icon(self) -> str:
+        count = self.coordinator.battery_check_result.get("low_battery_count", 0)
+        return (
+            "mdi:battery-alert-variant-outline"
+            if count > 0
+            else "mdi:battery-check-outline"
+        )
+
+    def _header_label(self) -> str:
+        res = self.coordinator.battery_check_result
+        count = res.get("low_battery_count", 0)
+        threshold = res.get("battery_threshold", 15)
+        if count == 0:
+            return f"✅ Alle OK (≥ {threshold} %)"
+        if count == 1:
+            return f"🔋 1 Gerät unter {threshold} %"
+        return f"🔋 {count} Geräte unter {threshold} %"
+
+    def _build_options(self) -> list[str]:
+        res = self.coordinator.battery_check_result
+        devices = res.get("devices", [])
+        header = self._header_label()
+        mapping: dict[str, bool] = {header: True}
+
+        for dev in devices:
+            pct = f"{dev['level']}%"
+            prefix = f"{pct} · "
+            budget = max(8, MAX_SELECT_LABEL_LEN - len(prefix))
+            short_name = compact_select_label(dev["name"], budget)
+            label = _dedupe_label(f"{prefix}{short_name}", mapping, MAX_SELECT_LABEL_LEN)
+            mapping[label] = True
+
+        mapping["🔄 Jetzt neu prüfen"] = True
+        return list(mapping.keys())
+
+    @property
+    def options(self) -> list[str]:
+        return self._build_options()
+
+    @property
+    def current_option(self) -> str | None:
+        return self._header_label()
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        res = self.coordinator.battery_check_result
+        return {
+            "anzahl": res.get("low_battery_count", 0),
+            "schwellwert": f"< {res.get('battery_threshold', 15)} %",
+            "geprueft_am": res.get("checked_at", ""),
+            "geraete": res.get("geraete", []),
+        }
+
+    async def async_select_option(self, option: str) -> None:
+        if option == "🔄 Jetzt neu prüfen":
+            await self.coordinator.async_run_battery_check(notify=False)
+        else:
+            # Dropdown schließt sauber und zeigt weiterhin die Übersicht im Kopf
+            self.async_write_ha_state()

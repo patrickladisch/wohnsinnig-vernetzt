@@ -248,7 +248,8 @@ class WohnsinnigVernetztBatteryCheckSensor(WohnsinnigVernetztEntity, SensorEntit
 
     @property
     def native_value(self) -> str:
-        return self.coordinator.battery_check_result.get("status", "Ausstehend")
+        res = self.coordinator.battery_check_result
+        return res.get("summary_text") or res.get("status", "Ausstehend")
 
     @property
     def icon(self) -> str:
@@ -265,6 +266,7 @@ class WohnsinnigVernetztBatteryCheckSensor(WohnsinnigVernetztEntity, SensorEntit
         threshold = res.get("battery_threshold", 15)
         geraete = res.get("geraete", [])
         return {
+            "status": res.get("status", "OK"),
             "anzahl": res.get("low_battery_count", 0),
             "schwellwert": f"< {threshold} %",
             "geprueft_am": res.get("checked_at", ""),

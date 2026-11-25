@@ -44,6 +44,35 @@ def _resolve_device_info(
     return None, friendly_name
 
 
+def _build_summary_text(devices: list[dict], max_len: int = 255) -> str:
+    """Erstellt einen direkt lesbaren Sensor-Text mit allen schwachen Geräten (<= 255 Zeichen)."""
+    if not devices:
+        return "Alle OK"
+
+    entries = [f"{d['name']} ({d['level_formatted']})" for d in devices]
+    full = ", ".join(entries)
+    if len(full) <= max_len:
+        return full
+
+    chosen: list[str] = []
+    for idx, entry in enumerate(entries):
+        remaining = len(entries) - (idx + 1)
+        tail = f", +{remaining} weitere" if remaining > 0 else ""
+        candidate = ", ".join([*chosen, entry]) + tail
+        if len(candidate) <= max_len:
+            chosen.append(entry)
+        else:
+            break
+
+    if not chosen:
+        return entries[0][: max_len - 1].rstrip() + "…"
+
+    rest = len(entries) - len(chosen)
+    if rest > 0:
+        return f"{', '.join(chosen)}, +{rest} weitere"
+    return ", ".join(chosen)
+
+
 def run_battery_check(
     hass: HomeAssistant, battery_threshold: int = 15
 ) -> dict:
@@ -118,6 +147,7 @@ def run_battery_check(
 
     return {
         "status": status,
+        "summary_text": _build_summary_text(devices_clean),
         "low_battery_count": count,
         "battery_threshold": battery_threshold,
         "checked_at": datetime.now().strftime("%d.%m.%Y %H:%M"),

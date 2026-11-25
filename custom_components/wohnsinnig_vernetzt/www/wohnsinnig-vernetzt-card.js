@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.1.0
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.1.1
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -1024,6 +1024,7 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
     };
     this._open = false;
     this._busy = false;
+    this._liveData = null;
     this._lastKey = null;
   }
 
@@ -1079,6 +1080,7 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
       : "none";
     if (key !== this._lastKey) {
       this._lastKey = key;
+      this._liveData = null;
       this._render();
     }
   }
@@ -1098,20 +1100,28 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
     );
   }
 
-  async _refreshNow(ev) {
-    if (ev) ev.stopPropagation();
+  async _fetchLiveCheck() {
     if (!this._hass || this._busy) return;
     this._busy = true;
     this._render();
     try {
-      await this._hass.callService("wohnsinnig_vernetzt", "run_battery_check", {
-        notify: false,
-      });
+      const data = await this._hass.callApi("GET", "wohnsinnig_vernetzt/battery_check");
+      if (data && Array.isArray(data.devices)) {
+        this._liveData = data;
+      }
     } catch (_) {
-      // ignore
+      // Fallback auf Sensor-Attribute
     } finally {
       this._busy = false;
       this._render();
+    }
+  }
+
+  _toggleOpen() {
+    this._open = !this._open;
+    this._render();
+    if (this._open) {
+      this._fetchLiveCheck();
     }
   }
 
@@ -1133,20 +1143,34 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
     }
 
     const attrs = sensor?.attributes || {};
-    const devices = Array.isArray(attrs.devices) ? attrs.devices : [];
-    const count = Number.isFinite(attrs.anzahl) ? attrs.anzahl : devices.length;
-    const threshold = attrs.schwellwert || "< 15 %";
-    const checkedAt = attrs.geprueft_am || "";
-    const statusText = sensor ? sensor.state : "Lädt…";
+    const devices = this._liveData
+      ? this._liveData.devices
+      : Array.isArray(attrs.devices)
+      ? attrs.devices
+      : [];
+    const count = this._liveData
+      ? this._liveData.low_battery_count
+      : Number.isFinite(attrs.anzahl)
+      ? attrs.anzahl
+      : devices.length;
+    const threshold = this._liveData
+      ? `< ${this._liveData.battery_threshold} %`
+      : attrs.schwellwert || "< 15 %";
+    const checkedAt = this._liveData
+      ? this._liveData.checked_at
+      : attrs.geprueft_am || "";
+    const badgeText = this._liveData
+      ? this._liveData.status
+      : attrs.status || (count === 0 ? "OK" : `${count} ${count === 1 ? "Gerät" : "Geräte"} ${threshold}`);
 
     if (subEl) {
       subEl.textContent = checkedAt
         ? `Schwellwert ${threshold} • Stand: ${checkedAt}`
-        : `Meldet alle Geräte ${threshold}`;
+        : `1 Klick zeigt alle Geräte ${threshold}`;
     }
 
     if (badgeEl) {
-      badgeEl.textContent = statusText;
+      badgeEl.textContent = badgeText;
       badgeEl.className = `bc-badge ${count > 0 ? "warn" : "ok"}`;
     }
 
@@ -1381,11 +1405,12 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
     `;
 
     this.shadowRoot.getElementById("bc-header").addEventListener("click", () => {
-      this._open = !this._open;
-      this._render();
+      this._toggleOpen();
     });
     this.shadowRoot.getElementById("bc-refresh").addEventListener("click", (ev) => {
-      this._refreshNow(ev);
+      ev.stopPropagation();
+      this._open = true;
+      this._fetchLiveCheck();
     });
   }
 }
@@ -1397,6 +1422,6 @@ if (!window.customCards.some((c) => c.type === "wohnsinnig-vernetzt-battery-card
   window.customCards.push({
     type: "wohnsinnig-vernetzt-battery-card",
     name: "Wohnsinnig vernetzt Batterie-Check",
-    description: "Zeigt beim Anklicken alle Geräte mit weniger als 15 % Batteriestand an.",
+    description: "Zeigt auf einen Klick live alle Geräte mit weniger als 15 % Batteriestand an.",
   });
 }
