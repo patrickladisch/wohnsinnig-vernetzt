@@ -19,3 +19,15 @@ import_blueprint:
 mark_episode_seen:
   name: Neue Folge als gesehen markieren
   description: Bestätigt die aktuell neueste Folge und setzt den Sensor „Neue Folge verfügbar“ zurück auf NEIN.
+
+run_systemcheck:
+  name: Systemcheck ausführen
+  description: Prüft die lokale Home-Assistant-Instanz auf nicht verfügbare Entitäten, schwache Batterien und verwaiste Einträge.
+  fields:
+    notify:
+      name: Zusammenfassung als HA-Benachrichtigung anzeigen
+      description: Erstellt zusätzlich eine kompakte Übersicht in der Home-Assistant-Seitenleiste.
+      required: false
+      default: false
+      selector:
+        boolean:

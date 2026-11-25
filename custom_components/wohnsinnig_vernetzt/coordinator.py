@@ -1,4 +1,4 @@
-"""DataUpdateCoordinator für RSS-Feed, Blueprints, Wiedergabe und Benachrichtigungen."""
+"""DataUpdateCoordinator für RSS-Feed, Blueprint-Updates, Infografiken, Eilmeldungen & Systemcheck."""
 
 from __future__ import annotations
 
@@ -18,22 +18,32 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .alerts import parse_alerts_payload, sync_alert_repair_issues
 from .blueprints import (
     HTTP_HEADERS,
     annotate_installed_status,
     build_safe_filename,
+    compute_yaml_hash,
     extract_blueprints_from_js_blob,
+    match_episode_infographic,
     normalize_blueprint_url,
     parse_blueprints_catalog_with_hints,
+    parse_infographics_from_html,
     validate_blueprint_yaml,
     write_blueprint_file,
 )
 from .const import (
+    ACTION_MARK_SEEN,
+    ACTION_PLAY_LATEST,
     BROWSER_TARGET,
+    DEFAULT_ALERTS_URL,
+    DEFAULT_BATTERY_THRESHOLD,
     DEFAULT_BLUEPRINTS_URL,
     DOMAIN,
+    EVENT_ALERT_RECEIVED,
     EVENT_BLUEPRINT_IMPORTED,
     EVENT_NEW_EPISODE,
+    EVENT_SYSTEMCHECK_COMPLETED,
     NOTIFY_ALL_MOBILE_APPS,
     NOTIFY_NONE,
     SIGNAL_NEW_EPISODE,
@@ -41,6 +51,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .notify_helpers import get_mobile_app_services
+from .systemcheck import run_systemcheck
 
 _LOGGER = logging.getLogger(__name__)
 ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"
@@ -138,15 +149,16 @@ def _parse_rss(xml_text: str, override_logo_url: str = "") -> dict:
     podcast_desc = _clean_html(channel.findtext("description"))
     podcast_link = (channel.findtext("link") or "").strip()
 
-    podcast_image = override_logo_url.strip()
-    if not podcast_image:
-        itunes_img = channel.find(f"{{{ITUNES_NS}}}image")
-        if itunes_img is not None and itunes_img.attrib.get("href"):
-            podcast_image = itunes_img.attrib["href"]
-        else:
-            img_url = channel.findtext("image/url")
-            if img_url:
-                podcast_image = img_url.strip()
+    rss_podcast_image = ""
+    itunes_img = channel.find(f"{{{ITUNES_NS}}}image")
+    if itunes_img is not None and itunes_img.attrib.get("href"):
+        rss_podcast_image = itunes_img.attrib["href"]
+    else:
+        img_url = channel.findtext("image/url")
+        if img_url:
+            rss_podcast_image = img_url.strip()
+
+    podcast_image = override_logo_url.strip() or rss_podcast_image
 
     episodes = []
     for idx, item in enumerate(channel.findall("item"), start=1):
@@ -164,11 +176,13 @@ def _parse_rss(xml_text: str, override_logo_url: str = "") -> dict:
         description = _clean_html(item.findtext("description"))
         episode_link = (item.findtext("link") or "").strip()
 
-        ep_image = podcast_image
-        if not override_logo_url.strip():
-            ep_itunes_img = item.find(f"{{{ITUNES_NS}}}image")
-            if ep_itunes_img is not None and ep_itunes_img.attrib.get("href"):
-                ep_image = ep_itunes_img.attrib["href"]
+        ep_itunes_img = item.find(f"{{{ITUNES_NS}}}image")
+        rss_ep_image = (
+            ep_itunes_img.attrib["href"]
+            if ep_itunes_img is not None and ep_itunes_img.attrib.get("href")
+            else rss_podcast_image
+        )
+        ep_image = podcast_image if override_logo_url.strip() else rss_ep_image
 
         episodes.append(
             {
@@ -181,6 +195,7 @@ def _parse_rss(xml_text: str, override_logo_url: str = "") -> dict:
                 "audio_url": audio_url,
                 "link": episode_link,
                 "image": ep_image,
+                "rss_image": rss_ep_image,
             }
         )
 
@@ -189,12 +204,13 @@ def _parse_rss(xml_text: str, override_logo_url: str = "") -> dict:
         "description": podcast_desc,
         "link": podcast_link,
         "image": podcast_image,
+        "rss_image": rss_podcast_image,
         "episodes": episodes,
     }
 
 
 class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
-    """Verwaltet RSS-Feed, Blueprints, Benachrichtigungen und Media-Player-Wiedergabe."""
+    """Zentraler Coordinator für Podcast, Blueprint-Updates, Infografiken, Eilmeldungen & Systemcheck."""
 
     def __init__(
         self,
@@ -205,6 +221,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         logo_url: str = "",
         spotify_show_url: str = "",
         blueprints_url: str = DEFAULT_BLUEPRINTS_URL,
+        alerts_url: str = DEFAULT_ALERTS_URL,
+        battery_threshold: int = DEFAULT_BATTERY_THRESHOLD,
         default_target: str = BROWSER_TARGET,
     ) -> None:
         super().__init__(
@@ -215,15 +233,22 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         )
         self.rss_url = rss_url
         self.blueprints_url = (blueprints_url or DEFAULT_BLUEPRINTS_URL).strip()
+        self.alerts_url = (alerts_url or DEFAULT_ALERTS_URL).strip()
         self.logo_url = logo_url.strip()
         self.spotify_show_url = spotify_show_url.strip()
         self.spotify_show_id = extract_spotify_show_id(self.spotify_show_url)
+        self.battery_threshold = int(battery_threshold or DEFAULT_BATTERY_THRESHOLD)
         self._config_notify_services = list(notify_services)
         self.notify_services = list(notify_services)
 
         self._store: Store[dict] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._seen_guids: set[str] | None = None
+        self._seen_alert_ids: set[str] = set()
+        self._remote_bp_cache: dict[str, dict] = {}
+        self._tracked_issue_ids: set[str] = set()
+
         self.notifications_enabled: bool = True
+        self.alerts_enabled: bool = True
         self.selected_episode_guid: str | None = None
         self.acknowledged_latest_guid: str | None = None
         self.acknowledged_latest_title: str = ""
@@ -233,6 +258,18 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.play_command_id: int = 0
         self.last_command_action: str = "idle"
         self.blueprints_last_error: str | None = None
+        self.systemcheck_result: dict = {
+            "status": "Ausstehend",
+            "total_issues": 0,
+            "unavailable_count": 0,
+            "low_battery_count": 0,
+            "orphaned_count": 0,
+            "battery_threshold": self.battery_threshold,
+            "checked_at": "",
+            "unavailable_entities": [],
+            "low_battery_entities": [],
+            "orphaned_entities": [],
+        }
         self._state_loaded: bool = False
 
     async def _async_load_state(self) -> None:
@@ -242,8 +279,14 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         if isinstance(stored, dict):
             if isinstance(stored.get("guids"), list):
                 self._seen_guids = set(stored["guids"])
+            if isinstance(stored.get("seen_alert_ids"), list):
+                self._seen_alert_ids = set(stored["seen_alert_ids"])
+            if isinstance(stored.get("remote_bp_cache"), dict):
+                self._remote_bp_cache = stored["remote_bp_cache"]
             if isinstance(stored.get("notifications_enabled"), bool):
                 self.notifications_enabled = stored["notifications_enabled"]
+            if isinstance(stored.get("alerts_enabled"), bool):
+                self.alerts_enabled = stored["alerts_enabled"]
             if isinstance(stored.get("selected_episode_guid"), str):
                 self.selected_episode_guid = stored["selected_episode_guid"]
             if isinstance(stored.get("acknowledged_latest_guid"), str):
@@ -254,7 +297,6 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 self.selected_blueprint_id = stored["selected_blueprint_id"]
             if isinstance(stored.get("target_entity"), str) and stored["target_entity"]:
                 self.target_entity = stored["target_entity"]
-            # Wenn Optionen im Config-Flow unverändert sind, das am Gerät gewählte Handy beibehalten
             stored_last_cfg = stored.get("last_config_notify_services")
             stored_notify = stored.get("notify_services")
             if (
@@ -268,7 +310,10 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         await self._store.async_save(
             {
                 "guids": list(self._seen_guids or []),
+                "seen_alert_ids": list(self._seen_alert_ids),
+                "remote_bp_cache": self._remote_bp_cache,
                 "notifications_enabled": self.notifications_enabled,
+                "alerts_enabled": self.alerts_enabled,
                 "selected_episode_guid": self.selected_episode_guid,
                 "acknowledged_latest_guid": self.acknowledged_latest_guid,
                 "acknowledged_latest_title": self.acknowledged_latest_title,
@@ -282,6 +327,18 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
     async def async_set_notifications_enabled(self, enabled: bool) -> None:
         """Aktiviert oder deaktiviert Benachrichtigungen persistent."""
         self.notifications_enabled = enabled
+        await self._async_save_state()
+        self.async_update_listeners()
+
+    async def async_set_alerts_enabled(self, enabled: bool) -> None:
+        """Aktiviert oder deaktiviert Smart-Home-Eilmeldungen inkl. Repair-Issues."""
+        self.alerts_enabled = enabled
+        self._tracked_issue_ids = sync_alert_repair_issues(
+            self.hass,
+            self.get_alerts(),
+            self.alerts_enabled,
+            self._tracked_issue_ids,
+        )
         await self._async_save_state()
         self.async_update_listeners()
 
@@ -307,15 +364,35 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.async_update_listeners()
 
     def get_episodes(self) -> list[dict]:
-        """Liefert alle geladenen Episoden."""
         return (self.data or {}).get("episodes", [])
 
     def get_blueprints(self) -> list[dict]:
-        """Liefert alle geladenen Blueprints von wohnsinnigvernetzt.de."""
         return (self.data or {}).get("blueprints", [])
 
+    def get_infographics(self) -> list[dict]:
+        return (self.data or {}).get("infographics", [])
+
+    def get_alerts(self) -> list[dict]:
+        return (self.data or {}).get("alerts", [])
+
+    def get_current_infographic(self, episode: dict | None = None) -> dict | None:
+        ep = episode or self.get_selected_episode()
+        return match_episode_infographic(ep, self.get_infographics())
+
+    def get_public_push_image(self, episode: dict | None = None) -> str:
+        """Liefert eine öffentlich per HTTPS erreichbare Bild-URL für Push-Vorschauen."""
+        ep = episode or self.get_selected_episode()
+        info = self.get_current_infographic(ep)
+        if info and info.get("url", "").startswith("https://"):
+            return info["url"]
+        if ep and ep.get("rss_image", "").startswith("https://"):
+            return ep["rss_image"]
+        rss_img = (self.data or {}).get("rss_image", "")
+        if rss_img.startswith("https://"):
+            return rss_img
+        return ""
+
     def get_selected_blueprint(self) -> dict | None:
-        """Gibt den im Dropdown gewählten Blueprint zurück."""
         blueprints = self.get_blueprints()
         if not blueprints:
             return None
@@ -326,7 +403,6 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         return blueprints[0]
 
     def get_selected_episode(self) -> dict | None:
-        """Gibt die aktuell ausgewählte Episode (oder die neueste) zurück."""
         episodes = self.get_episodes()
         if not episodes:
             return None
@@ -337,7 +413,6 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         return episodes[0]
 
     def get_selected_index(self) -> int:
-        """Index der aktuell gewählten Episode."""
         episodes = self.get_episodes()
         if not episodes:
             return 0
@@ -348,7 +423,6 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         return 0
 
     def has_newer_episode(self) -> bool:
-        """Prüft, ob eine neuere Folge als die zuletzt bekannte/bestätigte vorliegt."""
         episodes = self.get_episodes()
         if not episodes:
             return False
@@ -358,7 +432,6 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         return False
 
     def newer_episodes_count(self) -> int:
-        """Zählt, wie viele Folgen neuer als die zuletzt bestätigte sind."""
         episodes = self.get_episodes()
         if not episodes or not self.acknowledged_latest_guid:
             return 0
@@ -380,11 +453,103 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         await self._async_save_state()
         self.async_update_listeners()
 
-    async def _async_fetch_blueprints(self, session: aiohttp.ClientSession) -> list[dict]:
-        """Lädt die Website (inkl. Scripts/Unterseiten bei Bedarf) und extrahiert alle Blueprints."""
+    async def async_run_systemcheck(self, notify: bool = False) -> dict:
+        """Führt den lokalen Smart-Home-Systemcheck aus und aktualisiert den Sensor."""
+        result = run_systemcheck(self.hass, battery_threshold=self.battery_threshold)
+        self.systemcheck_result = result
+        self.hass.bus.async_fire(EVENT_SYSTEMCHECK_COMPLETED, result)
+        self.async_update_listeners()
+
+        if notify:
+            summary_lines = [
+                f"Status: {result['status']} (Stand: {result['checked_at']})",
+                f"• Nicht verfügbar: {result['unavailable_count']}",
+                f"• Schwache Batterien (≤ {result['battery_threshold']} %): {result['low_battery_count']}",
+                f"• Verwaiste Entitäten: {result['orphaned_count']}",
+            ]
+            if result["low_battery_entities"]:
+                summary_lines.append(
+                    "Batterien: " + ", ".join(result["low_battery_entities"][:5])
+                )
+            await self.hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {
+                    "title": "Wohnsinnig vernetzt – Systemcheck",
+                    "message": "\n".join(summary_lines),
+                },
+                blocking=False,
+            )
+
+        return result
+
+    async def _async_check_blueprint_updates(
+        self, session: aiohttp.ClientSession, blueprints: list[dict]
+    ) -> list[dict]:
+        """Prüft für alle lokal installierten Blueprints per Hash/ETag auf Updates."""
+        cache_dirty = False
+        updated: list[dict] = []
+
+        for bp in blueprints:
+            if not bp.get("installed"):
+                updated.append(bp)
+                continue
+
+            url = bp["url"]
+            cached = self._remote_bp_cache.get(url, {})
+            headers = dict(HTTP_HEADERS)
+            if cached.get("etag"):
+                headers["If-None-Match"] = cached["etag"]
+            if cached.get("last_modified"):
+                headers["If-Modified-Since"] = cached["last_modified"]
+
+            remote_hash = cached.get("sha256", "")
+            try:
+                async with session.get(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                    headers=headers,
+                ) as resp:
+                    if resp.status == 304 and remote_hash:
+                        pass
+                    elif resp.status == 200:
+                        yaml_text = await resp.text(errors="replace")
+                        remote_hash = compute_yaml_hash(yaml_text)
+                        new_entry = {
+                            "sha256": remote_hash,
+                            "etag": resp.headers.get("ETag", ""),
+                            "last_modified": resp.headers.get("Last-Modified", ""),
+                        }
+                        if new_entry != cached:
+                            self._remote_bp_cache[url] = new_entry
+                            cache_dirty = True
+            except (aiohttp.ClientError, TimeoutError):
+                pass
+
+            local_hash = bp.get("local_hash", "")
+            update_available = bool(
+                local_hash and remote_hash and local_hash != remote_hash
+            )
+            updated.append(
+                {
+                    **bp,
+                    "remote_hash": remote_hash,
+                    "update_available": update_available,
+                }
+            )
+
+        if cache_dirty:
+            await self._async_save_state()
+
+        return updated
+
+    async def _async_fetch_website_assets(
+        self, session: aiohttp.ClientSession
+    ) -> tuple[list[dict], list[dict]]:
+        """Lädt wohnsinnigvernetzt.de einmalig und extrahiert Blueprints + Infografiken."""
         if not self.blueprints_url:
             self.blueprints_last_error = "Keine Blueprints-URL konfiguriert."
-            return []
+            return [], []
 
         self.blueprints_last_error = None
         try:
@@ -399,18 +564,21 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         except (aiohttp.ClientError, TimeoutError) as err:
             self.blueprints_last_error = f"Abruf fehlgeschlagen: {err}"
             _LOGGER.warning(
-                "Blueprints konnten nicht von %s geladen werden: %s",
+                "Webseite %s konnte nicht geladen werden: %s",
                 self.blueprints_url,
                 err,
             )
-            return (self.data or {}).get("blueprints", [])
+            prev = self.data or {}
+            return prev.get("blueprints", []), prev.get("infographics", [])
 
         try:
             parsed, ext_scripts, subpages = await self.hass.async_add_executor_job(
                 parse_blueprints_catalog_with_hints, raw_text, final_url
             )
+            infographics = await self.hass.async_add_executor_job(
+                parse_infographics_from_html, raw_text, final_url
+            )
 
-            # Fallback 1: externe same-origin JS-Dateien scannen, falls HTML selbst keine Links enthielt
             if not parsed and ext_scripts:
                 seen_urls: set[str] = set()
                 for script_url in ext_scripts[:6]:
@@ -432,7 +600,6 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                     except (aiohttp.ClientError, TimeoutError):
                         continue
 
-            # Fallback 2: verlinkte Blueprint-Unterseite (z. B. /blueprints) prüfen
             if not parsed and subpages:
                 for sub_url in subpages[:3]:
                     try:
@@ -461,16 +628,58 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 )
                 _LOGGER.warning("%s", self.blueprints_last_error)
 
-            return await self.hass.async_add_executor_job(
+            annotated = await self.hass.async_add_executor_job(
                 annotate_installed_status, parsed, self.hass.config.config_dir
             )
+            checked = await self._async_check_blueprint_updates(session, annotated)
+            return checked, infographics
         except Exception as err:
             self.blueprints_last_error = f"Parse-Fehler: {err}"
-            _LOGGER.warning("Fehler beim Parsen der Blueprints: %s", err)
-            return (self.data or {}).get("blueprints", [])
+            _LOGGER.warning("Fehler beim Parsen von Website-Assets: %s", err)
+            prev = self.data or {}
+            return prev.get("blueprints", []), prev.get("infographics", [])
+
+    async def _async_fetch_alerts(self, session: aiohttp.ClientSession) -> list[dict]:
+        """Lädt optionale Smart-Home-Eilmeldungen (leise bei 404, kein Log-Spam)."""
+        if not self.alerts_url:
+            return []
+        try:
+            async with session.get(
+                self.alerts_url,
+                timeout=aiohttp.ClientTimeout(total=15),
+                headers=HTTP_HEADERS,
+            ) as response:
+                if response.status == 404:
+                    return []
+                response.raise_for_status()
+                raw_text = await response.text(errors="replace")
+        except (aiohttp.ClientError, TimeoutError):
+            return (self.data or {}).get("alerts", [])
+
+        return parse_alerts_payload(raw_text)
+
+    async def _handle_alerts(self, alerts: list[dict]) -> None:
+        """Synchronisiert Repair-Issues und schickt Push-Meldungen für neue Eilmeldungen."""
+        self._tracked_issue_ids = sync_alert_repair_issues(
+            self.hass, alerts, self.alerts_enabled, self._tracked_issue_ids
+        )
+
+        if not self.alerts_enabled or not alerts:
+            return
+
+        new_alerts = [a for a in alerts if a["id"] not in self._seen_alert_ids]
+        if not new_alerts:
+            return
+
+        for alert in new_alerts:
+            self._seen_alert_ids.add(alert["id"])
+            self.hass.bus.async_fire(EVENT_ALERT_RECEIVED, alert)
+            if self.notifications_enabled:
+                await self._async_send_alert_notification(alert)
+
+        await self._async_save_state()
 
     def _reset_ha_blueprint_cache(self, bp_domain: str) -> None:
-        """Leert den internen HA-Blueprint-Cache, damit neue Dateien sofort sichtbar sind."""
         try:
             bp_data = self.hass.data.get("blueprint")
             if isinstance(bp_data, dict):
@@ -513,6 +722,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             ) as response:
                 response.raise_for_status()
                 yaml_text = await response.text(errors="replace")
+                etag = response.headers.get("ETag", "")
+                last_mod = response.headers.get("Last-Modified", "")
         except (aiohttp.ClientError, TimeoutError) as err:
             raise HomeAssistantError(
                 f"Blueprint konnte nicht heruntergeladen werden: {err}"
@@ -539,14 +750,28 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             yaml_text,
         )
 
+        new_hash = compute_yaml_hash(yaml_text)
+        self._remote_bp_cache[resolved_url] = {
+            "sha256": new_hash,
+            "etag": etag,
+            "last_modified": last_mod,
+        }
+
         self._reset_ha_blueprint_cache(bp_domain)
 
         if self.data and "blueprints" in self.data:
+            refreshed = []
+            for bp in self.data["blueprints"]:
+                if bp["url"] == resolved_url:
+                    bp = {**bp, "remote_hash": new_hash}
+                refreshed.append(bp)
             self.data["blueprints"] = await self.hass.async_add_executor_job(
                 annotate_installed_status,
-                self.data["blueprints"],
+                refreshed,
                 self.hass.config.config_dir,
             )
+
+        await self._async_save_state()
 
         result = {
             "title": (target_bp["title"] if target_bp else None) or bp_name or filename,
@@ -590,6 +815,24 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
 
         return imported
 
+    async def async_update_outdated_blueprints(self) -> list[dict]:
+        """Aktualisiert alle lokal installierten Blueprints, für die ein Update vorliegt."""
+        outdated = [
+            bp
+            for bp in self.get_blueprints()
+            if bp.get("installed") and bp.get("update_available")
+        ]
+        if not outdated:
+            return []
+
+        updated: list[dict] = []
+        for bp in outdated:
+            res = await self.async_import_blueprint(
+                url=bp["url"], blueprint_id=bp["id"]
+            )
+            updated.append(res)
+        return updated
+
     async def async_play_episode(
         self, guid: str | None = None, from_browser: bool = False
     ) -> None:
@@ -622,8 +865,13 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         await self._async_save_state()
         self.async_update_listeners()
 
+    async def async_play_latest_episode(self) -> None:
+        """Startet gezielt die allerneueste Episode (z. B. über Push-Action-Button)."""
+        episodes = self.get_episodes()
+        if episodes:
+            await self.async_play_episode(episodes[0]["guid"])
+
     async def async_pause(self, from_browser: bool = False) -> None:
-        """Pausiert die laufende Wiedergabe."""
         self.playback_state = "paused"
         if self.target_entity != BROWSER_TARGET:
             await self._async_call_target_service("media_pause")
@@ -633,7 +881,6 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.async_update_listeners()
 
     async def async_resume(self, from_browser: bool = False) -> None:
-        """Setzt die Wiedergabe fort oder startet die aktuelle Folge."""
         if self.playback_state == "idle":
             await self.async_play_episode(
                 self.selected_episode_guid, from_browser=from_browser
@@ -649,7 +896,6 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.async_update_listeners()
 
     async def async_stop(self, from_browser: bool = False) -> None:
-        """Stoppt die Wiedergabe."""
         self.playback_state = "idle"
         if self.target_entity != BROWSER_TARGET:
             await self._async_call_target_service("media_stop")
@@ -659,7 +905,6 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.async_update_listeners()
 
     async def async_next_episode(self) -> None:
-        """Springt zur nächstälteren Folge in der Liste und spielt sie ab."""
         episodes = self.get_episodes()
         if not episodes:
             return
@@ -668,7 +913,6 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         await self.async_play_episode(episodes[next_idx]["guid"])
 
     async def async_previous_episode(self) -> None:
-        """Springt zur neueren Folge in der Liste und spielt sie ab."""
         episodes = self.get_episodes()
         if not episodes:
             return
@@ -679,7 +923,6 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
     async def async_sync_browser_state(
         self, state: str, guid: str | None = None
     ) -> None:
-        """Synchronisiert Statusänderungen aus der Dashboard-Karte ohne Rückkopplung."""
         if guid:
             self.selected_episode_guid = guid
             episodes = self.get_episodes()
@@ -692,7 +935,6 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.async_update_listeners()
 
     async def _async_play_on_ha_target(self, episode: dict) -> None:
-        """Sendet die originale RSS-Audio-URL direkt an den gewählten HA-Lautsprecher."""
         target = self.target_entity
         if not target or target == BROWSER_TARGET:
             return
@@ -736,7 +978,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             )
 
     async def _async_update_data(self) -> dict:
-        """Lädt RSS-Feed und Blueprints und prüft auf neue Episoden."""
+        """Lädt RSS-Feed, Blueprints, Infografiken, Eilmeldungen und führt den Systemcheck aus."""
         await self._async_load_state()
         session = async_get_clientsession(self.hass)
         try:
@@ -757,8 +999,12 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 f"RSS-Feed konnte nicht verarbeitet werden: {err}"
             ) from err
 
-        blueprints = await self._async_fetch_blueprints(session)
+        blueprints, infographics = await self._async_fetch_website_assets(session)
+        alerts = await self._async_fetch_alerts(session)
+
         data["blueprints"] = blueprints
+        data["infographics"] = infographics
+        data["alerts"] = alerts
 
         if data["episodes"] and not self.selected_episode_guid:
             self.selected_episode_guid = data["episodes"][0]["guid"]
@@ -766,16 +1012,22 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         if blueprints and not self.selected_blueprint_id:
             self.selected_blueprint_id = blueprints[0]["id"]
 
-        await self._handle_new_episodes(data["episodes"])
+        if self.hass.is_running:
+            self.systemcheck_result = run_systemcheck(
+                self.hass, battery_threshold=self.battery_threshold
+            )
+
+        await self._handle_new_episodes(data["episodes"], data)
+        await self._handle_alerts(alerts)
         return data
 
-    async def _handle_new_episodes(self, episodes: list[dict]) -> None:
-        """Prüft auf unbekannte GUIDs und löst Benachrichtigungen aus."""
+    async def _handle_new_episodes(
+        self, episodes: list[dict], fresh_data: dict | None = None
+    ) -> None:
         if not episodes:
             return
 
         if self.acknowledged_latest_guid is None and episodes:
-            # Prüfen, ob sensor.wohnsinnig_vernetzt_neueste_folge bereits einen älteren Titel anzeigt
             matched_prev = None
             prev_state = self.hass.states.get("sensor.wohnsinnig_vernetzt_neueste_folge")
             if prev_state and prev_state.state not in (
@@ -806,12 +1058,13 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             self.hass.bus.async_fire(EVENT_NEW_EPISODE, ep)
             async_dispatcher_send(self.hass, SIGNAL_NEW_EPISODE, ep)
             if self.notifications_enabled:
-                await self.async_send_notification(ep, is_test=False)
+                await self.async_send_notification(
+                    ep, is_test=False, data_override=fresh_data
+                )
 
         await self._async_save_state()
 
     def _resolve_active_notify_services(self) -> list[str]:
-        """Löst NOTIFY_ALL_MOBILE_APPS in konkrete notify.mobile_app_* Dienste auf."""
         resolved: list[str] = []
         for svc in self.notify_services:
             if not svc or svc == NOTIFY_NONE:
@@ -825,9 +1078,12 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         return resolved
 
     async def async_send_notification(
-        self, episode: dict, is_test: bool = False
+        self,
+        episode: dict,
+        is_test: bool = False,
+        data_override: dict | None = None,
     ) -> None:
-        """Sendet eine Push-Benachrichtigung an alle ausgewählten Handys / Dienste."""
+        """Sendet eine interaktive Push-Benachrichtigung mit Infografik & Action-Buttons."""
         services = self._resolve_active_notify_services()
         if not services:
             if is_test:
@@ -841,6 +1097,18 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         message = f"{episode['title']}{duration_part}"
         ep_link = episode.get("link") or "https://www.wohnsinnigvernetzt.de"
 
+        source_data = data_override or self.data or {}
+        matched_info = match_episode_infographic(
+            episode, source_data.get("infographics", [])
+        )
+        image_url = ""
+        if matched_info and matched_info.get("url", "").startswith("https://"):
+            image_url = matched_info["url"]
+        elif episode.get("rss_image", "").startswith("https://"):
+            image_url = episode["rss_image"]
+        elif source_data.get("rss_image", "").startswith("https://"):
+            image_url = source_data["rss_image"]
+
         for svc in services:
             if "." in svc:
                 domain, service = svc.split(".", 1)
@@ -851,13 +1119,26 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "title": title,
                 "message": message,
             }
-            # Für Companion-App-Handys direkt anklickbare Push-Daten anhängen
             if domain == "notify" and service.startswith("mobile_app_"):
-                payload["data"] = {
+                mobile_data: dict = {
                     "clickAction": ep_link,
                     "url": ep_link,
                     "tag": "wohnsinnig_vernetzt_new_episode",
+                    "actions": [
+                        {
+                            "action": ACTION_PLAY_LATEST,
+                            "title": "▶️ Folge abspielen",
+                        },
+                        {
+                            "action": ACTION_MARK_SEEN,
+                            "title": "✅ Als gesehen markieren",
+                        },
+                    ],
                 }
+                if image_url:
+                    mobile_data["image"] = image_url
+                    mobile_data["attachment"] = {"url": image_url}
+                payload["data"] = mobile_data
 
             try:
                 await self.hass.services.async_call(
@@ -871,8 +1152,41 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                     err,
                 )
 
+    async def _async_send_alert_notification(self, alert: dict) -> None:
+        """Schickt eine Push-Meldung für eine neue Smart-Home-Eilmeldung."""
+        services = self._resolve_active_notify_services()
+        if not services:
+            return
+
+        icon_prefix = "🚨" if alert["severity"] == "critical" else "⚠️" if alert["severity"] == "warning" else "ℹ️"
+        title = f"{icon_prefix} Niels & Patrick warnen: {alert['title']}"
+        message = alert["message"] or alert["title"]
+        url = alert.get("url") or "https://www.wohnsinnigvernetzt.de/"
+
+        for svc in services:
+            if "." in svc:
+                domain, service = svc.split(".", 1)
+            else:
+                domain, service = "notify", svc
+
+            payload: dict = {"title": title, "message": message}
+            if domain == "notify" and service.startswith("mobile_app_"):
+                payload["data"] = {
+                    "clickAction": url,
+                    "url": url,
+                    "tag": f"wohnsinnig_vernetzt_alert_{alert['id']}",
+                }
+            try:
+                await self.hass.services.async_call(
+                    domain, service, payload, blocking=False
+                )
+            except Exception as err:
+                _LOGGER.warning(
+                    "Eilmeldung über %s.%s fehlgeschlagen: %s", domain, service, err
+                )
+
     async def async_send_test_notification(self) -> None:
-        """Sendet eine Test-Benachrichtigung mit der aktuellsten Folge."""
+        """Sendet eine Test-Benachrichtigung inkl. Infografik & Action-Buttons."""
         episodes = self.get_episodes()
         ep = (
             episodes[0]

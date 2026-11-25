@@ -1,4 +1,4 @@
-"""Switch-Entität für Benachrichtigungen bei neuen Folgen."""
+"""Switch-Entitäten für Benachrichtigungen und Smart-Home-Eilmeldungen."""
 
 from __future__ import annotations
 
@@ -18,10 +18,13 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Erstellt den Benachrichtigungs-Schalter."""
+    """Erstellt die Konfigurationsschalter."""
     coordinator: WohnsinnigVernetztCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        [WohnsinnigVernetztNotifySwitch(coordinator, entry.entry_id)]
+        [
+            WohnsinnigVernetztNotifySwitch(coordinator, entry.entry_id),
+            WohnsinnigVernetztAlertsSwitch(coordinator, entry.entry_id),
+        ]
     )
 
 
@@ -52,3 +55,26 @@ class WohnsinnigVernetztNotifySwitch(WohnsinnigVernetztEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_notifications_enabled(False)
+
+
+class WohnsinnigVernetztAlertsSwitch(WohnsinnigVernetztEntity, SwitchEntity):
+    """Schaltet Smart-Home-Eilmeldungen („Niels & Patrick warnen“) ein oder aus."""
+
+    _attr_name = "Eilmeldungen aktiv"
+    _attr_icon = "mdi:shield-alert-outline"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "alerts_enabled")
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.alerts_enabled
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_alerts_enabled(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_alerts_enabled(False)

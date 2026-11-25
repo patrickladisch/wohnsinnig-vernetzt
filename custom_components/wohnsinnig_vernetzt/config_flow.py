@@ -9,6 +9,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_ALERTS_URL,
+    CONF_BATTERY_THRESHOLD,
     CONF_BLUEPRINTS_URL,
     CONF_LOGO_URL,
     CONF_NOTIFY_SERVICE,
@@ -16,6 +18,8 @@ from .const import (
     CONF_RSS_URL,
     CONF_SCAN_INTERVAL,
     CONF_SPOTIFY_SHOW_URL,
+    DEFAULT_ALERTS_URL,
+    DEFAULT_BATTERY_THRESHOLD,
     DEFAULT_BLUEPRINTS_URL,
     DEFAULT_LOGO_URL,
     DEFAULT_NOTIFY_SERVICES,
@@ -29,7 +33,9 @@ from .coordinator import normalize_notify_services
 from .notify_helpers import get_mobile_app_services, get_notify_choices
 
 
-def _build_schema(hass: HomeAssistant, defaults: dict, is_initial: bool = False) -> vol.Schema:
+def _build_schema(
+    hass: HomeAssistant, defaults: dict, is_initial: bool = False
+) -> vol.Schema:
     raw_notify = defaults.get(
         CONF_NOTIFY_SERVICES,
         defaults.get(CONF_NOTIFY_SERVICE),
@@ -37,7 +43,9 @@ def _build_schema(hass: HomeAssistant, defaults: dict, is_initial: bool = False)
     if raw_notify is None:
         if is_initial:
             mobile_apps = get_mobile_app_services(hass)
-            current_notify = [mobile_apps[0]] if mobile_apps else list(DEFAULT_NOTIFY_SERVICES)
+            current_notify = (
+                [mobile_apps[0]] if mobile_apps else list(DEFAULT_NOTIFY_SERVICES)
+            )
         else:
             current_notify = list(DEFAULT_NOTIFY_SERVICES)
     else:
@@ -69,9 +77,19 @@ def _build_schema(hass: HomeAssistant, defaults: dict, is_initial: bool = False)
                 CONF_BLUEPRINTS_URL,
                 default=defaults.get(CONF_BLUEPRINTS_URL) or DEFAULT_BLUEPRINTS_URL,
             ): str,
+            vol.Optional(
+                CONF_ALERTS_URL,
+                default=defaults.get(CONF_ALERTS_URL) or DEFAULT_ALERTS_URL,
+            ): str,
+            vol.Required(
+                CONF_BATTERY_THRESHOLD,
+                default=int(
+                    defaults.get(CONF_BATTERY_THRESHOLD, DEFAULT_BATTERY_THRESHOLD)
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=5, max=50)),
             vol.Required(
                 CONF_SCAN_INTERVAL,
-                default=defaults.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+                default=int(defaults.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)),
             ): vol.All(vol.Coerce(int), vol.Range(min=5, max=1440)),
             vol.Optional(
                 CONF_SPOTIFY_SHOW_URL,
@@ -121,7 +139,6 @@ class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=user_input)
 
         current = {**self.config_entry.data, **self.config_entry.options}
-        # Aktuellen Stand aus dem Coordinator berücksichtigen, falls am Gerät ein Handy gewählt wurde
         coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
         if coordinator is not None:
             current[CONF_NOTIFY_SERVICES] = list(coordinator.notify_services)

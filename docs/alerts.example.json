@@ -1,0 +1,13 @@
+{
+  "alerts": [
+    {
+      "id": "2026-11-beispiel-hinweis",
+      "active": false,
+      "severity": "warning",
+      "title": "Beispiel: Wichtiger Hinweis vor dem Update",
+      "message": "Setze 'active' auf true, um diesen Hinweis bei allen Hörern als Eilmeldung und Home-Assistant-Repair-Hinweis anzuzeigen.",
+      "url": "https://www.wohnsinnigvernetzt.de/",
+      "date": "2026-11-25"
+    }
+  ]
+}

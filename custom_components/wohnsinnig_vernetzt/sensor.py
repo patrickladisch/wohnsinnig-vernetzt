@@ -1,4 +1,4 @@
-"""Sensor-Entitäten für Wohnsinnig vernetzt."""
+"""Sensor-Entitäten für Podcast, Blueprints, Eilmeldungen und Systemcheck."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Erstellt die Podcast- und Blueprint-Sensoren."""
+    """Erstellt alle Sensoren der Integration."""
     coordinator: WohnsinnigVernetztCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
@@ -25,6 +25,8 @@ async def async_setup_entry(
             WohnsinnigVernetztNewEpisodeAvailableSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztEpisodesSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztBlueprintsSensor(coordinator, entry.entry_id),
+            WohnsinnigVernetztAlertSensor(coordinator, entry.entry_id),
+            WohnsinnigVernetztSystemcheckSensor(coordinator, entry.entry_id),
         ]
     )
 
@@ -143,7 +145,7 @@ class WohnsinnigVernetztEpisodesSensor(WohnsinnigVernetztEntity, SensorEntity):
 
 
 class WohnsinnigVernetztBlueprintsSensor(WohnsinnigVernetztEntity, SensorEntity):
-    """Zeigt alle verfügbaren Blueprints von wohnsinnigvernetzt.de inkl. Import-Status."""
+    """Zeigt alle verfügbaren Blueprints inkl. Import- und Update-Status."""
 
     _attr_name = "Blueprints"
     _attr_icon = "mdi:file-code-outline"
@@ -165,6 +167,9 @@ class WohnsinnigVernetztBlueprintsSensor(WohnsinnigVernetztEntity, SensorEntity)
         return {
             "source_url": self.coordinator.blueprints_url,
             "installed_count": sum(1 for bp in bps if bp.get("installed")),
+            "updates_available_count": sum(
+                1 for bp in bps if bp.get("update_available")
+            ),
             "last_error": self.coordinator.blueprints_last_error,
             "blueprints": [
                 {
@@ -172,8 +177,97 @@ class WohnsinnigVernetztBlueprintsSensor(WohnsinnigVernetztEntity, SensorEntity)
                     "description": bp.get("description", ""),
                     "url": bp["url"],
                     "installed": bp.get("installed", False),
+                    "update_available": bp.get("update_available", False),
                     "installed_path": bp.get("installed_path", ""),
                 }
                 for bp in bps
             ],
+        }
+
+
+class WohnsinnigVernetztAlertSensor(WohnsinnigVernetztEntity, SensorEntity):
+    """Zeigt aktive Smart-Home-Eilmeldungen („Niels & Patrick warnen“)."""
+
+    _attr_name = "Eilmeldung"
+    _unrecorded_attributes = frozenset({"all_alerts"})
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "community_alert")
+
+    @property
+    def native_value(self) -> str:
+        if not self.coordinator.alerts_enabled:
+            return "Deaktiviert"
+        alerts = self.coordinator.get_alerts()
+        if not alerts:
+            return "Keine Meldung"
+        return alerts[0]["title"][:255]
+
+    @property
+    def icon(self) -> str:
+        if not self.coordinator.alerts_enabled:
+            return "mdi:shield-off-outline"
+        alerts = self.coordinator.get_alerts()
+        if not alerts:
+            return "mdi:shield-check-outline"
+        sev = alerts[0].get("severity", "info")
+        if sev == "critical":
+            return "mdi:alert-decagram"
+        if sev == "warning":
+            return "mdi:alert-circle"
+        return "mdi:information-outline"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        alerts = self.coordinator.get_alerts() if self.coordinator.alerts_enabled else []
+        top = alerts[0] if alerts else {}
+        return {
+            "active": bool(alerts),
+            "alerts_enabled": self.coordinator.alerts_enabled,
+            "alerts_count": len(alerts),
+            "severity": top.get("severity", "none"),
+            "message": top.get("message", ""),
+            "url": top.get("url", ""),
+            "date": top.get("date", ""),
+            "all_alerts": alerts,
+        }
+
+
+class WohnsinnigVernetztSystemcheckSensor(WohnsinnigVernetztEntity, SensorEntity):
+    """Zeigt das Ergebnis des lokalen Wohnsinnig-vernetzt-Systemchecks."""
+
+    _attr_name = "Systemcheck"
+    _unrecorded_attributes = frozenset(
+        {"unavailable_entities", "low_battery_entities", "orphaned_entities"}
+    )
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "systemcheck")
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.systemcheck_result.get("status", "Ausstehend")
+
+    @property
+    def icon(self) -> str:
+        issues = self.coordinator.systemcheck_result.get("total_issues", 0)
+        return "mdi:stethoscope" if issues > 0 else "mdi:heart-pulse"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        res = self.coordinator.systemcheck_result
+        return {
+            "total_issues": res.get("total_issues", 0),
+            "unavailable_count": res.get("unavailable_count", 0),
+            "low_battery_count": res.get("low_battery_count", 0),
+            "orphaned_count": res.get("orphaned_count", 0),
+            "battery_threshold": res.get("battery_threshold", 15),
+            "checked_at": res.get("checked_at", ""),
+            "unavailable_entities": res.get("unavailable_entities", []),
+            "low_battery_entities": res.get("low_battery_entities", []),
+            "orphaned_entities": res.get("orphaned_entities", []),
         }

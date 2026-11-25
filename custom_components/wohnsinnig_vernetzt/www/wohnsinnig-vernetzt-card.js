@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v1.5.1
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.0.0
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -905,19 +905,30 @@ class WohnsinnigVernetztBlueprintsCard extends HTMLElement {
       t.textContent = bp.title;
       tWrap.appendChild(t);
 
-      if (bp.installed) {
+      if (bp.update_available) {
+        const badge = document.createElement("span");
+        badge.className = "bp-badge update";
+        badge.textContent = "⬆ Update verfügbar";
+        tWrap.appendChild(badge);
+      } else if (bp.installed) {
         const badge = document.createElement("span");
         badge.className = "bp-badge";
-        badge.textContent = "✓ Importiert";
+        badge.textContent = "✓ Aktuell";
         tWrap.appendChild(badge);
       }
 
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.className = `bp-btn ${bp.installed ? "secondary" : ""}`;
+      btn.className = `bp-btn ${bp.installed && !bp.update_available ? "secondary" : ""}`;
       const busy = this._busyIds.has(bp.id) || this._busyAll;
       btn.disabled = busy;
-      btn.textContent = busy ? "…" : bp.installed ? "Aktualisieren" : "Importieren";
+      btn.textContent = busy
+        ? "…"
+        : bp.update_available
+        ? "Update"
+        : bp.installed
+        ? "Neu laden"
+        : "Importieren";
       btn.addEventListener("click", () => this._importOne(bp));
 
       head.appendChild(tWrap);
@@ -953,7 +964,7 @@ class WohnsinnigVernetztBlueprintsCard extends HTMLElement {
         .bp-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
         .bp-title-wrap { min-width: 0; flex: 1; }
         .bp-title { font-size: 13px; font-weight: 600; }
-        .bp-badge { display: inline-block; margin-top: 3px; font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 999px; color: var(--success-color, #4caf50); background: rgba(76, 175, 80, 0.14); }
+        .bp-badge { display: inline-block; margin-top: 3px; font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 999px; color: var(--success-color, #4caf50); background: rgba(76, 175, 80, 0.14); } .bp-badge.update { color: var(--warning-color, #ff9800); background: rgba(255, 152, 0, 0.16); }
         .bp-desc { font-size: 12px; color: var(--secondary-text-color); margin-top: 4px; line-height: 1.35; }
         button { border: none; cursor: pointer; font-family: inherit; }
         .bp-btn { padding: 6px 11px; border-radius: 8px; font-size: 12px; font-weight: 600; background: var(--primary-color); color: var(--text-primary-color, #fff); flex-shrink: 0; }

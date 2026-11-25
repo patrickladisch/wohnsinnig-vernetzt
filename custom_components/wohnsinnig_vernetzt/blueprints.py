@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import html as html_lib
 from html.parser import HTMLParser
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -573,23 +574,35 @@ def parse_blueprints_catalog(raw_text: str, base_url: str) -> list[dict]:
 
 
 def annotate_installed_status(blueprints: list[dict], config_dir: str) -> list[dict]:
-    """Prüft lokal im HA-Konfigurationsordner, welche Blueprints bereits importiert sind."""
+    """Prüft lokal im HA-Konfigurationsordner, welche Blueprints installiert sind inkl. Hash."""
     enriched: list[dict] = []
     config_root = Path(config_dir)
     for bp in blueprints:
         fname = bp["filename"]
         installed_domain = None
+        local_hash = ""
         for domain in ALLOWED_BLUEPRINT_DOMAINS:
             target = config_root / "blueprints" / domain / BLUEPRINT_SUBDIR / fname
             if target.is_file():
                 installed_domain = domain
+                local_hash = _read_local_hash(target)
                 break
+        remote_hash = bp.get("remote_hash", "")
+        update_available = bool(
+            installed_domain
+            and local_hash
+            and remote_hash
+            and local_hash != remote_hash
+        )
         enriched.append(
             {
                 **bp,
                 "installed": installed_domain is not None,
                 "installed_domain": installed_domain or "automation",
                 "installed_path": f"{BLUEPRINT_SUBDIR}/{fname}" if installed_domain else "",
+                "local_hash": local_hash,
+                "remote_hash": remote_hash,
+                "update_available": update_available,
             }
         )
     return enriched
@@ -604,3 +617,170 @@ def write_blueprint_file(
     target_file = target_dir / filename
     target_file.write_text(yaml_text, encoding="utf-8")
     return f"{BLUEPRINT_SUBDIR}/{filename}"
+
+
+def compute_yaml_hash(yaml_text: str) -> str:
+    """Berechnet einen zeilenumbruch-normalisierten SHA-256-Hash für Update-Vergleiche."""
+    normalized = yaml_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def _read_local_hash(path: Path) -> str:
+    try:
+        return compute_yaml_hash(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return ""
+
+
+_IMAGE_URL_RE = re.compile(
+    r"""(?P<q>["'`])(?P<url>(?:https?://|(?:\.\.?/|/|[a-zA-Z0-9_-]+/))[^"'`<>\n\r]+?\.(?:png|jpe?g|webp)(?:\?[^"'`<>\n\r]*)?)(?P=q)""",
+    re.IGNORECASE,
+)
+
+_IGNORED_IMAGE_HINTS = (
+    "logo",
+    "favicon",
+    "apple-touch",
+    "icon",
+    "avatar",
+    "instagram",
+    "spotify",
+    "badge",
+    "spinner",
+    "placeholder",
+)
+
+
+def _is_infographic_candidate(url: str, alt: str = "") -> bool:
+    low_url = unquote(url).lower()
+    low_alt = (alt or "").lower()
+    if any(bad in low_url for bad in _IGNORED_IMAGE_HINTS):
+        return False
+    if low_alt in ("logo", "wohnsinnig vernetzt", "instagram"):
+        return False
+    return True
+
+
+def _normalize_image_url(raw_url: str, base_url: str) -> str:
+    url = html_lib.unescape(raw_url).replace("\\/", "/").strip().strip("'\"`")
+    if not url or url.startswith("data:"):
+        return ""
+    resolved = urljoin(base_url, url)
+    parsed = urlparse(resolved)
+    if parsed.scheme not in ("http", "https"):
+        return ""
+    safe_path = quote(unquote(parsed.path), safe="/:@-._~!$&'()*+,;=")
+    return urlunparse(
+        (parsed.scheme, parsed.netloc, safe_path, parsed.params, parsed.query, "")
+    )
+
+
+class _InfographicHTMLParser(HTMLParser):
+    """Sammelt Episoden-Infografiken aus <img>-Tags und JS/Alpine-Galerie-Blöcken."""
+
+    def __init__(self, base_url: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.images: list[dict] = []
+        self._seen: set[str] = set()
+        self._in_script = False
+        self.js_blobs: list[str] = []
+
+    def _add(self, raw_url: str, title: str = "") -> None:
+        norm = _normalize_image_url(raw_url, self.base_url)
+        if not norm or norm in self._seen:
+            return
+        if not _is_infographic_candidate(norm, title):
+            return
+        self._seen.add(norm)
+        clean_title = (title or "").strip() or _prettify_filename(norm)
+        self.images.append({"url": norm, "title": clean_title[:160]})
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        ltag = tag.lower()
+        attrs_dict = {k.lower(): (v or "") for k, v in attrs}
+        if ltag == "script":
+            self._in_script = True
+        if ltag == "img":
+            alt = attrs_dict.get("alt") or attrs_dict.get("title") or ""
+            for key in ("src", "data-src", "data-full", "data-image"):
+                val = attrs_dict.get(key, "").strip()
+                if val and not val.startswith("{") and ".svg" not in val.lower():
+                    self._add(val, alt)
+        for attr_name, attr_val in attrs_dict.items():
+            if not attr_val:
+                continue
+            if attr_name in ("x-data", "x-init", "onclick", "@click") and any(
+                ext in attr_val.lower() for ext in (".png", ".jpg", ".jpeg", ".webp")
+            ):
+                self.js_blobs.append(attr_val)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "script":
+            self._in_script = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_script and data:
+            self.js_blobs.append(data)
+
+
+def parse_infographics_from_html(raw_html: str, base_url: str) -> list[dict]:
+    """Extrahiert alle Infografik-Bilder von wohnsinnigvernetzt.de."""
+    parser = _InfographicHTMLParser(base_url)
+    parser.feed(raw_html)
+
+    results = list(parser.images)
+    seen = {img["url"] for img in results}
+
+    for blob in parser.js_blobs:
+        cleaned = html_lib.unescape(blob).replace("\\/", "/")
+        for match in _IMAGE_URL_RE.finditer(cleaned):
+            norm = _normalize_image_url(match.group("url"), base_url)
+            if not norm or norm in seen:
+                continue
+            if not _is_infographic_candidate(norm):
+                continue
+            seen.add(norm)
+            obj_slice = _slice_enclosing_js_object(cleaned, match.start(), match.end())
+            t_match = re.search(
+                r"""(?:["']?(?:title|name|caption|alt|titel)["']?)\s*:\s*(?P<q>["'`])(?P<val>[^"'`]{2,160})(?P=q)""",
+                obj_slice,
+                re.IGNORECASE,
+            )
+            title = t_match.group("val").strip() if t_match else _prettify_filename(norm)
+            results.append({"url": norm, "title": title[:160]})
+
+    return results
+
+
+def _tokenize_title(text: str) -> set[str]:
+    words = re.findall(r"[a-zäöüß0-9]{3,}", (text or "").lower())
+    stop = {"und", "der", "die", "das", "mit", "für", "von", "aus", "ein", "eine", "teil", "home", "assistant", "folge"}
+    return {w for w in words if w not in stop}
+
+
+def match_episode_infographic(
+    episode: dict | None, infographics: list[dict]
+) -> dict | None:
+    """Findet die am besten passende Infografik zu einer Podcast-Folge (oder die neueste)."""
+    if not infographics:
+        return None
+    if not episode:
+        return infographics[0]
+
+    ep_tokens = _tokenize_title(episode.get("title", ""))
+    best_item = None
+    best_score = 0
+
+    for item in infographics:
+        item_tokens = _tokenize_title(
+            f"{item.get('title', '')} {Path(unquote(urlparse(item['url']).path)).stem}"
+        )
+        score = len(ep_tokens & item_tokens)
+        if score > best_score:
+            best_score = score
+            best_item = item
+
+    if best_item and best_score >= 1:
+        return best_item
+    return infographics[0]

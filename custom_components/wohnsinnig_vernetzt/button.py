@@ -1,4 +1,4 @@
-"""Button-Entitäten für Blueprint-Import, Episoden-Bestätigung, Test und Refresh."""
+"""Button-Entitäten für Blueprint-Import, Episoden-Bestätigung, Systemcheck, Test & Refresh."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ async def async_setup_entry(
             WohnsinnigVernetztImportBlueprintButton(coordinator, entry.entry_id),
             WohnsinnigVernetztImportAllBlueprintsButton(coordinator, entry.entry_id),
             WohnsinnigVernetztMarkSeenButton(coordinator, entry.entry_id),
+            WohnsinnigVernetztSystemcheckButton(coordinator, entry.entry_id),
             WohnsinnigVernetztTestNotifyButton(coordinator, entry.entry_id),
             WohnsinnigVernetztRefreshButton(coordinator, entry.entry_id),
         ]
@@ -76,8 +77,24 @@ class WohnsinnigVernetztMarkSeenButton(WohnsinnigVernetztEntity, ButtonEntity):
         await self.coordinator.async_mark_latest_episode_seen()
 
 
+class WohnsinnigVernetztSystemcheckButton(WohnsinnigVernetztEntity, ButtonEntity):
+    """Führt den lokalen Smart-Home-Systemcheck sofort aus."""
+
+    _attr_name = "Systemcheck jetzt ausführen"
+    _attr_icon = "mdi:stethoscope"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "run_systemcheck")
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_run_systemcheck(notify=True)
+
+
 class WohnsinnigVernetztTestNotifyButton(WohnsinnigVernetztEntity, ButtonEntity):
-    """Schickt sofort eine Test-Benachrichtigung."""
+    """Schickt sofort eine Test-Benachrichtigung inkl. Infografik & Action-Buttons."""
 
     _attr_name = "Test-Benachrichtigung senden"
     _attr_icon = "mdi:bell-check"
@@ -93,7 +110,7 @@ class WohnsinnigVernetztTestNotifyButton(WohnsinnigVernetztEntity, ButtonEntity)
 
 
 class WohnsinnigVernetztRefreshButton(WohnsinnigVernetztEntity, ButtonEntity):
-    """Aktualisiert Podcast-Feed und Blueprint-Liste sofort."""
+    """Aktualisiert Podcast-Feed, Blueprints, Infografiken und Eilmeldungen sofort."""
 
     _attr_name = "Feed & Blueprints aktualisieren"
     _attr_icon = "mdi:refresh"

@@ -3,11 +3,13 @@
     "step": {
       "user": {
         "title": "Wohnsinnig vernetzt einrichten",
-        "description": "Wähle dein Handy für Push-Benachrichtigungen bei neuen Podcast-Folgen sowie RSS-Feed und Blueprints-Quelle.",
+        "description": "Konfiguriere Push-Benachrichtigungen, RSS-Feed, Blueprints, Eilmeldungen und den lokalen Systemcheck.",
         "data": {
           "rss_url": "Podcast RSS-URL",
           "notify_services": "Handy / Push-Benachrichtigung bei neuen Folgen",
-          "blueprints_url": "Blueprints-Seiten-URL",
+          "blueprints_url": "Blueprints- & Website-URL",
+          "alerts_url": "Eilmeldungen-JSON-URL (optional)",
+          "battery_threshold": "Systemcheck: Batterie-Warnschwelle (%)",
           "scan_interval": "Abrufintervall (Minuten)",
           "spotify_show_url": "Spotify-Show-URL (optional)",
           "logo_url": "Logo-URL (Standard: lokales Logo der Integration)"
@@ -25,7 +27,9 @@
         "data": {
           "rss_url": "Podcast RSS-URL",
           "notify_services": "Handy / Push-Benachrichtigung bei neuen Folgen",
-          "blueprints_url": "Blueprints-Seiten-URL",
+          "blueprints_url": "Blueprints- & Website-URL",
+          "alerts_url": "Eilmeldungen-JSON-URL (optional)",
+          "battery_threshold": "Systemcheck: Batterie-Warnschwelle (%)",
           "scan_interval": "Abrufintervall (Minuten)",
           "spotify_show_url": "Spotify-Show-URL (optional)",
           "logo_url": "Logo-URL"
@@ -36,6 +40,12 @@
   "device_automation": {
     "trigger_type": {
       "new_episode": "Neue Podcast-Folge erschienen"
+    }
+  },
+  "issues": {
+    "community_alert": {
+      "title": "Wohnsinnig vernetzt Hinweis: {title}",
+      "description": "{message}"
     }
   }
 }

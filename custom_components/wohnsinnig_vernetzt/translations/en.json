@@ -3,11 +3,13 @@
     "step": {
       "user": {
         "title": "Set up Wohnsinnig vernetzt",
-        "description": "Select your phone for new episode push notifications and configure the RSS feed and blueprints source.",
+        "description": "Configure push notifications, RSS feed, blueprints, community alerts, and local system check.",
         "data": {
           "rss_url": "Podcast RSS URL",
           "notify_services": "Phone / push notification for new episodes",
-          "blueprints_url": "Blueprints page URL",
+          "blueprints_url": "Blueprints & website URL",
+          "alerts_url": "Community alerts JSON URL (optional)",
+          "battery_threshold": "System check: low battery threshold (%)",
           "scan_interval": "Update interval (minutes)",
           "spotify_show_url": "Spotify Show URL (optional)",
           "logo_url": "Logo URL (default: built-in logo)"
@@ -25,7 +27,9 @@
         "data": {
           "rss_url": "Podcast RSS URL",
           "notify_services": "Phone / push notification for new episodes",
-          "blueprints_url": "Blueprints page URL",
+          "blueprints_url": "Blueprints & website URL",
+          "alerts_url": "Community alerts JSON URL (optional)",
+          "battery_threshold": "System check: low battery threshold (%)",
           "scan_interval": "Update interval (minutes)",
           "spotify_show_url": "Spotify Show URL (optional)",
           "logo_url": "Logo URL"
@@ -36,6 +40,12 @@
   "device_automation": {
     "trigger_type": {
       "new_episode": "New podcast episode published"
+    }
+  },
+  "issues": {
+    "community_alert": {
+      "title": "Wohnsinnig vernetzt Alert: {title}",
+      "description": "{message}"
     }
   }
 }

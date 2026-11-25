@@ -1,13 +1,13 @@
 # Wohnsinnig vernetzt – Home Assistant Integration
 
-Hol dir alle Folgen und Home-Assistant-Blueprints von **Wohnsinnig vernetzt** direkt in dein Home Assistant – inklusive Media Player, Episodenliste, automatischer Benachrichtigung bei neuen Folgen und 1-Klick-Blueprint-Import.
+Die offizielle Smart-Home-Integration zum Podcast **Wohnsinnig vernetzt** (von Niels und Patrick – [wohnsinnigvernetzt.de](https://www.wohnsinnigvernetzt.de)).
 
-## Features
-- **Echter Home Assistant Media Player (`media_player.wohnsinnig_vernetzt_player`):** Spielt Episoden direkt über die originale RSS-Tracking-URL im Dashboard-Browser oder auf jedem Home-Assistant-Lautsprecher ab – inklusive Medienbrowser.
-- **Direktstart über das Episoden-Dropdown:** Wählst du eine Folge unter *Folge auswählen & abspielen*, startet sofort die Wiedergabe auf dem gewählten Wiedergabe-Gerät.
-- **Blueprints direkt importieren:** Lädt automatisch alle aktuellen Blueprints von `www.wohnsinnigvernetzt.de` und importiert sie per 1-Klick-Button (einzeln oder alle auf einmal) direkt in deinen Home-Assistant-Ordner `blueprints/<domain>/wohnsinnig_vernetzt/`.
-- **Optionaler Spotify-Embed-Modus:** Hinterlege in den Optionen eure Spotify-Show-URL, um in der Dashboard-Karte auf den offiziellen Spotify-Player umzuschalten.
-- **Benachrichtigungen bei neuen Folgen:** Direkt auf der Geräteseite ein-/ausschaltbar, mit Mehrfachauswahl deiner `notify`-Dienste, Test-Button und Geräte-Auslöser für Automationen.
+## Features (v2.0.0)
+- **Podcast-Player & Episodenliste:** Kompakte Dashboard-Karte (`custom:wohnsinnig-vernetzt-card`) zum direkten Anhören sowie eine native `media_player`-Entität für Lautsprecher im Haus.
+- **Native Blueprint-Updates:** Importiert alle Blueprints von `wohnsinnigvernetzt.de` per Klick direkt nach Home Assistant und überwacht installierte Blueprints über eine native `update`-Entität – inklusive 1-Klick-Update unter *Einstellungen → Updates*.
+- **Interaktive Push-Nachrichten mit Episoden-Infografik:** Stellt die Episoden-Infografik als `image`-Entität bereit und schickt bei neuen Folgen eine Push-Nachricht mit Vorschaubild sowie zwei direkten Action-Buttons (**▶️ Folge abspielen** und **✅ Als gesehen markieren**) – ganz ohne eigene Automation.
+- **Smart-Home-Eilmeldungen („Niels & Patrick warnen“):** Optional abschaltbarer Hinweis-Sensor + Home Assistant Repair-Hinweis für akute Smart-Home-Warnungen über `alerts.json`.
+- **Lokaler Systemcheck:** Prüft 100 % lokal auf nicht verfügbare Entitäten, schwache Batterien (Schwellwert konfigurierbar) und verwaiste Entitäten.
 
 ## Installation über HACS
 1. **HACS** öffnen → oben rechts auf die **drei Punkte** → **Benutzerdefinierte Repositories**.
@@ -16,11 +16,9 @@ Hol dir alle Folgen und Home-Assistant-Blueprints von **Wohnsinnig vernetzt** di
 4. **Home Assistant neu starten**.
 5. Unter **Einstellungen → Geräte & Dienste → Integration hinzufügen** nach **Wohnsinnig vernetzt** suchen.
 
-## Dashboard-Karte hinzufügen
-Dashboard bearbeiten → **Karte hinzufügen** → ganz unten **Wohnsinnig vernetzt Player & Blueprints** auswählen.
+## Dashboard-Karten
+- Podcast-Player: `type: custom:wohnsinnig-vernetzt-card`
+- Blueprint-Manager: `type: custom:wohnsinnig-vernetzt-blueprints-card`
 
-```yaml
-type: custom:wohnsinnig-vernetzt-card
-title: Wohnsinnig vernetzt
-show_list_default: true
-```
+## Format für Smart-Home-Eilmeldungen (`alerts.json`)
+Eine Beispiel-Datei liegt im Repository unter `docs/alerts.example.json`. Lege die Datei unter `https://www.wohnsinnigvernetzt.de/alerts.json` ab – ist sie nicht vorhanden oder sind alle Einträge auf `"active": false`, bleibt alles ruhig.

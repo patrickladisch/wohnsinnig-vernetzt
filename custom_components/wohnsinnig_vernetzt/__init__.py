@@ -10,15 +10,19 @@ import voluptuous as vol
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
+from homeassistant.core import Event, HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import (
+    ACTION_MARK_SEEN,
+    ACTION_PLAY_LATEST,
     BROWSER_TARGET,
     CARD_FILENAME,
     CARD_URL_BASE,
+    CONF_ALERTS_URL,
+    CONF_BATTERY_THRESHOLD,
     CONF_BLUEPRINTS_URL,
     CONF_DEFAULT_TARGET,
     CONF_LOGO_URL,
@@ -27,6 +31,8 @@ from .const import (
     CONF_RSS_URL,
     CONF_SCAN_INTERVAL,
     CONF_SPOTIFY_SHOW_URL,
+    DEFAULT_ALERTS_URL,
+    DEFAULT_BATTERY_THRESHOLD,
     DEFAULT_BLUEPRINTS_URL,
     DEFAULT_LOGO_URL,
     DEFAULT_NOTIFY_SERVICES,
@@ -40,6 +46,7 @@ from .const import (
     DOMAIN,
     SERVICE_IMPORT_BLUEPRINT,
     SERVICE_MARK_EPISODE_SEEN,
+    SERVICE_RUN_SYSTEMCHECK,
     VERSION,
 )
 from .coordinator import WohnsinnigVernetztCoordinator, normalize_notify_services
@@ -51,6 +58,8 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
     Platform.BUTTON,
     Platform.EVENT,
+    Platform.UPDATE,
+    Platform.IMAGE,
 ]
 
 IMPORT_BLUEPRINT_SCHEMA = vol.Schema(
@@ -58,6 +67,12 @@ IMPORT_BLUEPRINT_SCHEMA = vol.Schema(
         vol.Optional("url"): str,
         vol.Optional("blueprint_id"): str,
         vol.Optional("import_all", default=False): bool,
+    }
+)
+
+RUN_SYSTEMCHECK_SCHEMA = vol.Schema(
+    {
+        vol.Optional("notify", default=False): bool,
     }
 )
 
@@ -83,6 +98,8 @@ class WohnsinnigVernetztEpisodesView(HomeAssistantView):
                     "image": DEFAULT_LOGO_URL,
                     "episodes": [],
                     "blueprints": [],
+                    "infographics": [],
+                    "alerts": [],
                     "spotify_show_id": "",
                     "spotify_show_url": "",
                     "target_entity": BROWSER_TARGET,
@@ -248,12 +265,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             CONF_SPOTIFY_SHOW_URL, DEFAULT_SPOTIFY_SHOW_URL
         ),
         blueprints_url=config.get(CONF_BLUEPRINTS_URL) or DEFAULT_BLUEPRINTS_URL,
+        alerts_url=config.get(CONF_ALERTS_URL) or DEFAULT_ALERTS_URL,
+        battery_threshold=int(
+            config.get(CONF_BATTERY_THRESHOLD, DEFAULT_BATTERY_THRESHOLD)
+        ),
         default_target=config.get(CONF_DEFAULT_TARGET, BROWSER_TARGET),
     )
 
     await coordinator.async_config_entry_first_refresh()
     domain_data["coordinator"] = coordinator
     domain_data[entry.entry_id] = coordinator
+
+    # Interaktive Companion-App-Push-Buttons direkt verarbeiten (ohne eigene Automation!)
+    async def _handle_mobile_app_action(event: Event) -> None:
+        action = event.data.get("action")
+        if action == ACTION_PLAY_LATEST:
+            await coordinator.async_play_latest_episode()
+        elif action == ACTION_MARK_SEEN:
+            await coordinator.async_mark_latest_episode_seen()
+
+    entry.async_on_unload(
+        hass.bus.async_listen("mobile_app_notification_action", _handle_mobile_app_action)
+    )
+
+    # Ersten Systemcheck nach vollständigem HA-Start ausführen (vermeidet Boot-Fehlalarme)
+    if not hass.is_running:
+        async def _run_initial_systemcheck(_event: Event) -> None:
+            await coordinator.async_run_systemcheck(notify=False)
+
+        entry.async_on_unload(
+            hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STARTED, _run_initial_systemcheck
+            )
+        )
 
     if not hass.services.has_service(DOMAIN, SERVICE_IMPORT_BLUEPRINT):
         async def _handle_import_blueprint(call: ServiceCall) -> None:
@@ -292,6 +336,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _handle_mark_episode_seen,
         )
 
+    if not hass.services.has_service(DOMAIN, SERVICE_RUN_SYSTEMCHECK):
+        async def _handle_run_systemcheck(call: ServiceCall) -> None:
+            coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
+                DOMAIN, {}
+            ).get("coordinator")
+            if coord is None:
+                raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
+            await coord.async_run_systemcheck(notify=bool(call.data.get("notify", False)))
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RUN_SYSTEMCHECK,
+            _handle_run_systemcheck,
+            schema=RUN_SYSTEMCHECK_SCHEMA,
+        )
+
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -309,8 +369,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         domain_data = hass.data.get(DOMAIN, {})
         domain_data.pop(entry.entry_id, None)
         domain_data.pop("coordinator", None)
-        if hass.services.has_service(DOMAIN, SERVICE_IMPORT_BLUEPRINT):
-            hass.services.async_remove(DOMAIN, SERVICE_IMPORT_BLUEPRINT)
-        if hass.services.has_service(DOMAIN, SERVICE_MARK_EPISODE_SEEN):
-            hass.services.async_remove(DOMAIN, SERVICE_MARK_EPISODE_SEEN)
+        for svc in (
+            SERVICE_IMPORT_BLUEPRINT,
+            SERVICE_MARK_EPISODE_SEEN,
+            SERVICE_RUN_SYSTEMCHECK,
+        ):
+            if hass.services.has_service(DOMAIN, svc):
+                hass.services.async_remove(DOMAIN, svc)
     return unload_ok
