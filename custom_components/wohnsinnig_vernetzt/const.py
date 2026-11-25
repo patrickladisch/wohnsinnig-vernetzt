@@ -1,7 +1,7 @@
 """Konstanten für Wohnsinnig vernetzt."""
 
 DOMAIN = "wohnsinnig_vernetzt"
-VERSION = "2.0.1"
+VERSION = "2.1.0"
 
 DEFAULT_RSS_URL = "https://anchor.fm/s/111a8abd0/podcast/rss"
 DEFAULT_BLUEPRINTS_URL = "https://www.wohnsinnigvernetzt.de/"
@@ -36,7 +36,7 @@ STORAGE_VERSION = 1
 EVENT_NEW_EPISODE = f"{DOMAIN}_new_episode"
 EVENT_BLUEPRINT_IMPORTED = f"{DOMAIN}_blueprint_imported"
 EVENT_ALERT_RECEIVED = f"{DOMAIN}_alert"
-EVENT_SYSTEMCHECK_COMPLETED = f"{DOMAIN}_systemcheck_completed"
+EVENT_BATTERY_CHECK_COMPLETED = f"{DOMAIN}_battery_check_completed"
 SIGNAL_NEW_EPISODE = f"{DOMAIN}_signal_new_episode"
 
 # Interaktive Companion-App-Push-Aktionen
@@ -45,7 +45,7 @@ ACTION_MARK_SEEN = "WV_MARK_SEEN"
 
 SERVICE_IMPORT_BLUEPRINT = "import_blueprint"
 SERVICE_MARK_EPISODE_SEEN = "mark_episode_seen"
-SERVICE_RUN_SYSTEMCHECK = "run_systemcheck"
+SERVICE_RUN_BATTERY_CHECK = "run_battery_check"
 
 BLUEPRINT_SUBDIR = "wohnsinnig_vernetzt"
 ALLOWED_BLUEPRINT_DOMAINS = ("automation", "script")

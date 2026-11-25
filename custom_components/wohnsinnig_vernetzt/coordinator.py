@@ -1,4 +1,4 @@
-"""DataUpdateCoordinator für RSS-Feed, Blueprint-Updates, Infografiken, Eilmeldungen & Systemcheck."""
+"""DataUpdateCoordinator für RSS-Feed, Blueprint-Updates, Infografiken, Eilmeldungen & Batterie-Check."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ from .const import (
     EVENT_ALERT_RECEIVED,
     EVENT_BLUEPRINT_IMPORTED,
     EVENT_NEW_EPISODE,
-    EVENT_SYSTEMCHECK_COMPLETED,
+    EVENT_BATTERY_CHECK_COMPLETED,
     NOTIFY_ALL_MOBILE_APPS,
     NOTIFY_NONE,
     SIGNAL_NEW_EPISODE,
@@ -51,7 +51,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .notify_helpers import get_mobile_app_services
-from .systemcheck import run_systemcheck
+from .battery_check import run_battery_check
 
 _LOGGER = logging.getLogger(__name__)
 ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"
@@ -215,7 +215,7 @@ def _parse_rss(xml_text: str, override_logo_url: str = "") -> dict:
 
 
 class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
-    """Zentraler Coordinator für Podcast, Blueprint-Updates, Infografiken, Eilmeldungen & Systemcheck."""
+    """Zentraler Coordinator für Podcast, Blueprint-Updates, Infografiken, Eilmeldungen & Batterie-Check."""
 
     def __init__(
         self,
@@ -263,17 +263,13 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.play_command_id: int = 0
         self.last_command_action: str = "idle"
         self.blueprints_last_error: str | None = None
-        self.systemcheck_result: dict = {
+        self.battery_check_result: dict = {
             "status": "Ausstehend",
-            "total_issues": 0,
-            "unavailable_count": 0,
             "low_battery_count": 0,
-            "orphaned_count": 0,
             "battery_threshold": self.battery_threshold,
             "checked_at": "",
-            "unavailable_entities": [],
-            "low_battery_entities": [],
-            "orphaned_entities": [],
+            "geraete": [],
+            "devices": [],
         }
         self._state_loaded: bool = False
 
@@ -458,30 +454,34 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         await self._async_save_state()
         self.async_update_listeners()
 
-    async def async_run_systemcheck(self, notify: bool = False) -> dict:
-        """Führt den lokalen Smart-Home-Systemcheck aus und aktualisiert den Sensor."""
-        result = run_systemcheck(self.hass, battery_threshold=self.battery_threshold)
-        self.systemcheck_result = result
-        self.hass.bus.async_fire(EVENT_SYSTEMCHECK_COMPLETED, result)
+    async def async_run_battery_check(self, notify: bool = False) -> dict:
+        """Führt den lokalen Batterie-Check (< Schwellwert) aus und aktualisiert den Sensor."""
+        result = run_battery_check(self.hass, battery_threshold=self.battery_threshold)
+        self.battery_check_result = result
+        self.hass.bus.async_fire(EVENT_BATTERY_CHECK_COMPLETED, result)
         self.async_update_listeners()
 
         if notify:
-            summary_lines = [
-                f"Status: {result['status']} (Stand: {result['checked_at']})",
-                f"• Nicht verfügbar: {result['unavailable_count']}",
-                f"• Schwache Batterien (≤ {result['battery_threshold']} %): {result['low_battery_count']}",
-                f"• Verwaiste Entitäten: {result['orphaned_count']}",
-            ]
-            if result["low_battery_entities"]:
-                summary_lines.append(
-                    "Batterien: " + ", ".join(result["low_battery_entities"][:5])
+            threshold = result["battery_threshold"]
+            if result["devices"]:
+                lines = [
+                    f"**Geräte unter {threshold} %** (Stand: {result['checked_at']}):",
+                    "",
+                ]
+                for dev in result["devices"]:
+                    lines.append(f"- **{dev['name']}:** {dev['level_formatted']}")
+                msg = "\n".join(lines)
+            else:
+                msg = (
+                    f"Alle geprüften Batterien liegen bei mindestens {threshold} % "
+                    f"(Stand: {result['checked_at']})."
                 )
             await self.hass.services.async_call(
                 "persistent_notification",
                 "create",
                 {
-                    "title": "Wohnsinnig vernetzt – Systemcheck",
-                    "message": "\n".join(summary_lines),
+                    "title": f"🔋 Batterie-Check ({result['status']})",
+                    "message": msg,
                 },
                 blocking=False,
             )
@@ -1022,7 +1022,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             )
 
     async def _async_update_data(self) -> dict:
-        """Lädt RSS-Feed, Blueprints, Infografiken, Eilmeldungen und führt den Systemcheck aus."""
+        """Lädt RSS-Feed, Blueprints, Infografiken, Eilmeldungen und führt den Batterie-Check aus."""
         await self._async_load_state()
         session = async_get_clientsession(self.hass)
         try:
@@ -1063,7 +1063,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             self.selected_blueprint_id = blueprints[0]["id"]
 
         if self.hass.is_running:
-            self.systemcheck_result = run_systemcheck(
+            self.battery_check_result = run_battery_check(
                 self.hass, battery_threshold=self.battery_threshold
             )
 

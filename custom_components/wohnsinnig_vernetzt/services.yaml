@@ -20,13 +20,13 @@ mark_episode_seen:
   name: Neue Folge als gesehen markieren
   description: Bestätigt die aktuell neueste Folge und setzt den Sensor „Neue Folge verfügbar“ zurück auf NEIN.
 
-run_systemcheck:
-  name: Systemcheck ausführen
-  description: Prüft die lokale Home-Assistant-Instanz auf nicht verfügbare Entitäten, schwache Batterien und verwaiste Einträge.
+run_battery_check:
+  name: Batterie-Check ausführen
+  description: Prüft lokal alle Batterien unter 15 % (bzw. unter dem konfigurierten Schwellwert) und listet alle betroffenen Geräte auf.
   fields:
     notify:
-      name: Zusammenfassung als HA-Benachrichtigung anzeigen
-      description: Erstellt zusätzlich eine kompakte Übersicht in der Home-Assistant-Seitenleiste.
+      name: Geräteliste als HA-Benachrichtigung anzeigen
+      description: Zeigt alle Geräte mit schwacher Batterie direkt in den Home-Assistant-Benachrichtigungen an.
       required: false
       default: false
       selector:

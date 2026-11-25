@@ -3,13 +3,13 @@
     "step": {
       "user": {
         "title": "Set up Wohnsinnig vernetzt",
-        "description": "Configure push notifications, RSS feed, blueprints, community alerts, and local system check.",
+        "description": "Configure push notifications, RSS feed, blueprints, community alerts, and local battery check.",
         "data": {
           "rss_url": "Podcast RSS URL",
           "notify_services": "Phone / push notification for new episodes",
           "blueprints_url": "Blueprints & website URL",
           "alerts_url": "Community alerts JSON URL (optional)",
-          "battery_threshold": "System check: low battery threshold (%)",
+          "battery_threshold": "Battery check: alert threshold (below %)",
           "scan_interval": "Update interval (minutes)",
           "spotify_show_url": "Spotify Show URL (optional)",
           "logo_url": "Logo URL (default: built-in logo)"
@@ -29,7 +29,7 @@
           "notify_services": "Phone / push notification for new episodes",
           "blueprints_url": "Blueprints & website URL",
           "alerts_url": "Community alerts JSON URL (optional)",
-          "battery_threshold": "System check: low battery threshold (%)",
+          "battery_threshold": "Battery check: alert threshold (below %)",
           "scan_interval": "Update interval (minutes)",
           "spotify_show_url": "Spotify Show URL (optional)",
           "logo_url": "Logo URL"

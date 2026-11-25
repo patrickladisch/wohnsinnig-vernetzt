@@ -46,7 +46,7 @@ from .const import (
     DOMAIN,
     SERVICE_IMPORT_BLUEPRINT,
     SERVICE_MARK_EPISODE_SEEN,
-    SERVICE_RUN_SYSTEMCHECK,
+    SERVICE_RUN_BATTERY_CHECK,
     VERSION,
 )
 from .coordinator import WohnsinnigVernetztCoordinator, normalize_notify_services
@@ -70,7 +70,7 @@ IMPORT_BLUEPRINT_SCHEMA = vol.Schema(
     }
 )
 
-RUN_SYSTEMCHECK_SCHEMA = vol.Schema(
+RUN_BATTERY_CHECK_SCHEMA = vol.Schema(
     {
         vol.Optional("notify", default=False): bool,
     }
@@ -110,6 +110,7 @@ class WohnsinnigVernetztEpisodesView(HomeAssistantView):
         return self.json(
             {
                 **coordinator.data,
+                "battery_check": coordinator.battery_check_result,
                 "spotify_show_id": coordinator.spotify_show_id,
                 "spotify_show_url": coordinator.spotify_show_url,
                 "target_entity": coordinator.target_entity,
@@ -197,6 +198,8 @@ class WohnsinnigVernetztImportBlueprintView(HomeAssistantView):
 LEGACY_ENTITY_UNIQUE_ID_SUFFIXES = (
     "_send_feedback",
     "_feedback_message",
+    "_systemcheck",
+    "_run_systemcheck",
 )
 
 
@@ -288,14 +291,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.bus.async_listen("mobile_app_notification_action", _handle_mobile_app_action)
     )
 
-    # Ersten Systemcheck nach vollständigem HA-Start ausführen (vermeidet Boot-Fehlalarme)
+    # Ersten Batterie-Check nach vollständigem HA-Start ausführen (vermeidet Boot-Fehlalarme)
     if not hass.is_running:
-        async def _run_initial_systemcheck(_event: Event) -> None:
-            await coordinator.async_run_systemcheck(notify=False)
+        async def _run_initial_battery_check(_event: Event) -> None:
+            await coordinator.async_run_battery_check(notify=False)
 
         entry.async_on_unload(
             hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_STARTED, _run_initial_systemcheck
+                EVENT_HOMEASSISTANT_STARTED, _run_initial_battery_check
             )
         )
 
@@ -336,20 +339,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _handle_mark_episode_seen,
         )
 
-    if not hass.services.has_service(DOMAIN, SERVICE_RUN_SYSTEMCHECK):
-        async def _handle_run_systemcheck(call: ServiceCall) -> None:
+    if not hass.services.has_service(DOMAIN, SERVICE_RUN_BATTERY_CHECK):
+        async def _handle_run_battery_check(call: ServiceCall) -> None:
             coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
                 DOMAIN, {}
             ).get("coordinator")
             if coord is None:
                 raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
-            await coord.async_run_systemcheck(notify=bool(call.data.get("notify", False)))
+            await coord.async_run_battery_check(notify=bool(call.data.get("notify", False)))
 
         hass.services.async_register(
             DOMAIN,
-            SERVICE_RUN_SYSTEMCHECK,
-            _handle_run_systemcheck,
-            schema=RUN_SYSTEMCHECK_SCHEMA,
+            SERVICE_RUN_BATTERY_CHECK,
+            _handle_run_battery_check,
+            schema=RUN_BATTERY_CHECK_SCHEMA,
         )
 
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
@@ -372,7 +375,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for svc in (
             SERVICE_IMPORT_BLUEPRINT,
             SERVICE_MARK_EPISODE_SEEN,
-            SERVICE_RUN_SYSTEMCHECK,
+            SERVICE_RUN_BATTERY_CHECK,
         ):
             if hass.services.has_service(DOMAIN, svc):
                 hass.services.async_remove(DOMAIN, svc)

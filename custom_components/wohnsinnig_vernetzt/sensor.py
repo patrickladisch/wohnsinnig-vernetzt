@@ -1,4 +1,4 @@
-"""Sensor-Entitäten für Podcast, Blueprints, Eilmeldungen und Systemcheck."""
+"""Sensor-Entitäten für Podcast, Blueprints, Eilmeldungen und Batterie-Check."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ async def async_setup_entry(
             WohnsinnigVernetztEpisodesSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztBlueprintsSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztAlertSensor(coordinator, entry.entry_id),
-            WohnsinnigVernetztSystemcheckSensor(coordinator, entry.entry_id),
+            WohnsinnigVernetztBatteryCheckSensor(coordinator, entry.entry_id),
         ]
     )
 
@@ -235,39 +235,39 @@ class WohnsinnigVernetztAlertSensor(WohnsinnigVernetztEntity, SensorEntity):
         }
 
 
-class WohnsinnigVernetztSystemcheckSensor(WohnsinnigVernetztEntity, SensorEntity):
-    """Zeigt das Ergebnis des lokalen Wohnsinnig-vernetzt-Systemchecks."""
+class WohnsinnigVernetztBatteryCheckSensor(WohnsinnigVernetztEntity, SensorEntity):
+    """Zeigt alle Geräte mit weniger als 15 % Batteriestand an."""
 
-    _attr_name = "Systemcheck"
-    _unrecorded_attributes = frozenset(
-        {"unavailable_entities", "low_battery_entities", "orphaned_entities"}
-    )
+    _attr_name = "Batterie-Check"
+    _unrecorded_attributes = frozenset({"geraete", "devices"})
 
     def __init__(
         self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
     ) -> None:
-        super().__init__(coordinator, entry_id, "systemcheck")
+        super().__init__(coordinator, entry_id, "battery_check")
 
     @property
     def native_value(self) -> str:
-        return self.coordinator.systemcheck_result.get("status", "Ausstehend")
+        return self.coordinator.battery_check_result.get("status", "Ausstehend")
 
     @property
     def icon(self) -> str:
-        issues = self.coordinator.systemcheck_result.get("total_issues", 0)
-        return "mdi:stethoscope" if issues > 0 else "mdi:heart-pulse"
+        count = self.coordinator.battery_check_result.get("low_battery_count", 0)
+        return (
+            "mdi:battery-alert-variant-outline"
+            if count > 0
+            else "mdi:battery-check-outline"
+        )
 
     @property
     def extra_state_attributes(self) -> dict:
-        res = self.coordinator.systemcheck_result
+        res = self.coordinator.battery_check_result
+        threshold = res.get("battery_threshold", 15)
+        geraete = res.get("geraete", [])
         return {
-            "total_issues": res.get("total_issues", 0),
-            "unavailable_count": res.get("unavailable_count", 0),
-            "low_battery_count": res.get("low_battery_count", 0),
-            "orphaned_count": res.get("orphaned_count", 0),
-            "battery_threshold": res.get("battery_threshold", 15),
-            "checked_at": res.get("checked_at", ""),
-            "unavailable_entities": res.get("unavailable_entities", []),
-            "low_battery_entities": res.get("low_battery_entities", []),
-            "orphaned_entities": res.get("orphaned_entities", []),
+            "anzahl": res.get("low_battery_count", 0),
+            "schwellwert": f"< {threshold} %",
+            "geprueft_am": res.get("checked_at", ""),
+            "geraete": geraete if geraete else [f"Keine Geräte unter {threshold} %"],
+            "devices": res.get("devices", []),
         }

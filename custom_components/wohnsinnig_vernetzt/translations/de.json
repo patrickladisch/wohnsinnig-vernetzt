@@ -3,13 +3,13 @@
     "step": {
       "user": {
         "title": "Wohnsinnig vernetzt einrichten",
-        "description": "Konfiguriere Push-Benachrichtigungen, RSS-Feed, Blueprints, Eilmeldungen und den lokalen Systemcheck.",
+        "description": "Konfiguriere Push-Benachrichtigungen, RSS-Feed, Blueprints, Eilmeldungen und den lokalen Batterie-Check.",
         "data": {
           "rss_url": "Podcast RSS-URL",
           "notify_services": "Handy / Push-Benachrichtigung bei neuen Folgen",
           "blueprints_url": "Blueprints- & Website-URL",
           "alerts_url": "Eilmeldungen-JSON-URL (optional)",
-          "battery_threshold": "Systemcheck: Batterie-Warnschwelle (%)",
+          "battery_threshold": "Batterie-Check: Warnschwelle (unter %)",
           "scan_interval": "Abrufintervall (Minuten)",
           "spotify_show_url": "Spotify-Show-URL (optional)",
           "logo_url": "Logo-URL (Standard: lokales Logo der Integration)"
@@ -29,7 +29,7 @@
           "notify_services": "Handy / Push-Benachrichtigung bei neuen Folgen",
           "blueprints_url": "Blueprints- & Website-URL",
           "alerts_url": "Eilmeldungen-JSON-URL (optional)",
-          "battery_threshold": "Systemcheck: Batterie-Warnschwelle (%)",
+          "battery_threshold": "Batterie-Check: Warnschwelle (unter %)",
           "scan_interval": "Abrufintervall (Minuten)",
           "spotify_show_url": "Spotify-Show-URL (optional)",
           "logo_url": "Logo-URL"

@@ -1,4 +1,4 @@
-"""Button-Entitäten für Blueprint-Import, Episoden-Bestätigung, Systemcheck, Test & Refresh."""
+"""Button-Entitäten für Blueprint-Import, Episoden-Bestätigung, Batterie-Check, Test & Refresh."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ async def async_setup_entry(
             WohnsinnigVernetztImportBlueprintButton(coordinator, entry.entry_id),
             WohnsinnigVernetztImportAllBlueprintsButton(coordinator, entry.entry_id),
             WohnsinnigVernetztMarkSeenButton(coordinator, entry.entry_id),
-            WohnsinnigVernetztSystemcheckButton(coordinator, entry.entry_id),
+            WohnsinnigVernetztBatteryCheckButton(coordinator, entry.entry_id),
             WohnsinnigVernetztTestNotifyButton(coordinator, entry.entry_id),
             WohnsinnigVernetztRefreshButton(coordinator, entry.entry_id),
         ]
@@ -77,20 +77,20 @@ class WohnsinnigVernetztMarkSeenButton(WohnsinnigVernetztEntity, ButtonEntity):
         await self.coordinator.async_mark_latest_episode_seen()
 
 
-class WohnsinnigVernetztSystemcheckButton(WohnsinnigVernetztEntity, ButtonEntity):
-    """Führt den lokalen Smart-Home-Systemcheck sofort aus."""
+class WohnsinnigVernetztBatteryCheckButton(WohnsinnigVernetztEntity, ButtonEntity):
+    """Prüft sofort alle Batterien unter 15 % und listet alle betroffenen Geräte auf."""
 
-    _attr_name = "Systemcheck jetzt ausführen"
-    _attr_icon = "mdi:stethoscope"
+    _attr_name = "Batterie-Check ausführen"
+    _attr_icon = "mdi:battery-alert-variant-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(
         self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
     ) -> None:
-        super().__init__(coordinator, entry_id, "run_systemcheck")
+        super().__init__(coordinator, entry_id, "run_battery_check")
 
     async def async_press(self) -> None:
-        await self.coordinator.async_run_systemcheck(notify=True)
+        await self.coordinator.async_run_battery_check(notify=True)
 
 
 class WohnsinnigVernetztTestNotifyButton(WohnsinnigVernetztEntity, ButtonEntity):

@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.0.1
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.1.0
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -1012,5 +1012,391 @@ if (!window.customCards.some((c) => c.type === "wohnsinnig-vernetzt-blueprints-c
     type: "wohnsinnig-vernetzt-blueprints-card",
     name: "Wohnsinnig vernetzt Blueprints",
     description: "Blueprints von wohnsinnigvernetzt.de direkt in Home Assistant importieren.",
+  });
+}
+class WohnsinnigVernetztBatteryCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = {
+      title: "Batterie-Check",
+      open_default: false,
+    };
+    this._open = false;
+    this._busy = false;
+    this._lastKey = null;
+  }
+
+  static getStubConfig() {
+    return {
+      title: "Batterie-Check",
+      open_default: false,
+    };
+  }
+
+  connectedCallback() {
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    this._render();
+  }
+
+  setConfig(config) {
+    this._config = {
+      title: "Batterie-Check",
+      open_default: false,
+      ...(config || {}),
+    };
+    this._open = Boolean(this._config.open_default);
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    this._render();
+  }
+
+  _findBatterySensor(hass) {
+    if (!hass || !hass.states) return null;
+    if (hass.states["sensor.wohnsinnig_vernetzt_batterie_check"]) {
+      return hass.states["sensor.wohnsinnig_vernetzt_batterie_check"];
+    }
+    return Object.values(hass.states).find(
+      (s) =>
+        s.entity_id.startsWith("sensor.wohnsinnig_vernetzt") &&
+        s.attributes &&
+        "schwellwert" in s.attributes &&
+        "devices" in s.attributes
+    );
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    const sensor = this._findBatterySensor(hass);
+    const key = sensor
+      ? `${sensor.state}|${sensor.attributes.geprueft_am || ""}|${sensor.attributes.anzahl ?? ""}`
+      : "none";
+    if (key !== this._lastKey) {
+      this._lastKey = key;
+      this._render();
+    }
+  }
+
+  getCardSize() {
+    return this._open ? 5 : 2;
+  }
+
+  _openMoreInfo(entityId) {
+    if (!entityId) return;
+    this.dispatchEvent(
+      new CustomEvent("hass-more-info", {
+        bubbles: true,
+        composed: true,
+        detail: { entityId },
+      })
+    );
+  }
+
+  async _refreshNow(ev) {
+    if (ev) ev.stopPropagation();
+    if (!this._hass || this._busy) return;
+    this._busy = true;
+    this._render();
+    try {
+      await this._hass.callService("wohnsinnig_vernetzt", "run_battery_check", {
+        notify: false,
+      });
+    } catch (_) {
+      // ignore
+    } finally {
+      this._busy = false;
+      this._render();
+    }
+  }
+
+  _render() {
+    if (!this.shadowRoot || this.shadowRoot.innerHTML === "") return;
+    const sensor = this._findBatterySensor(this._hass);
+    const titleEl = this.shadowRoot.getElementById("bc-title");
+    const subEl = this.shadowRoot.getElementById("bc-sub");
+    const badgeEl = this.shadowRoot.getElementById("bc-badge");
+    const chevronEl = this.shadowRoot.getElementById("bc-chevron");
+    const listWrap = this.shadowRoot.getElementById("bc-list-wrap");
+    const listEl = this.shadowRoot.getElementById("bc-list");
+    const refreshBtn = this.shadowRoot.getElementById("bc-refresh");
+
+    if (titleEl) titleEl.textContent = this._config.title || "Batterie-Check";
+    if (refreshBtn) {
+      refreshBtn.disabled = this._busy;
+      refreshBtn.textContent = this._busy ? "…" : "↻";
+    }
+
+    const attrs = sensor?.attributes || {};
+    const devices = Array.isArray(attrs.devices) ? attrs.devices : [];
+    const count = Number.isFinite(attrs.anzahl) ? attrs.anzahl : devices.length;
+    const threshold = attrs.schwellwert || "< 15 %";
+    const checkedAt = attrs.geprueft_am || "";
+    const statusText = sensor ? sensor.state : "Lädt…";
+
+    if (subEl) {
+      subEl.textContent = checkedAt
+        ? `Schwellwert ${threshold} • Stand: ${checkedAt}`
+        : `Meldet alle Geräte ${threshold}`;
+    }
+
+    if (badgeEl) {
+      badgeEl.textContent = statusText;
+      badgeEl.className = `bc-badge ${count > 0 ? "warn" : "ok"}`;
+    }
+
+    if (chevronEl) {
+      chevronEl.textContent = this._open ? "▲" : "▼";
+    }
+
+    if (listWrap) {
+      listWrap.style.display = this._open ? "block" : "none";
+    }
+
+    if (!listEl) return;
+    listEl.innerHTML = "";
+
+    if (!devices.length) {
+      const okEl = document.createElement("div");
+      okEl.className = "bc-empty";
+      okEl.textContent = `Alle Batterien sind im grünen Bereich (keine Geräte ${threshold}).`;
+      listEl.appendChild(okEl);
+      return;
+    }
+
+    devices.forEach((dev) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "bc-row";
+      row.addEventListener("click", () => this._openMoreInfo(dev.entity_id));
+
+      const left = document.createElement("div");
+      left.className = "bc-row-left";
+
+      const name = document.createElement("div");
+      name.className = "bc-row-name";
+      name.textContent = dev.name || dev.entity_id;
+
+      const barBg = document.createElement("div");
+      barBg.className = "bc-bar-bg";
+      const barFill = document.createElement("div");
+      barFill.className = "bc-bar-fill";
+      const pct = Math.max(0, Math.min(100, Number(dev.level) || 0));
+      barFill.style.width = `${Math.max(4, pct)}%`;
+      barBg.appendChild(barFill);
+
+      left.appendChild(name);
+      left.appendChild(barBg);
+
+      const pctEl = document.createElement("div");
+      pctEl.className = "bc-pct";
+      pctEl.textContent = dev.level_formatted || `${pct} %`;
+
+      row.appendChild(left);
+      row.appendChild(pctEl);
+      listEl.appendChild(row);
+    });
+  }
+
+  _renderShell() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        ha-card {
+          padding: 12px 14px;
+          color: var(--primary-text-color);
+        }
+        .bc-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          cursor: pointer;
+          user-select: none;
+        }
+        .bc-left {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+          flex: 1;
+        }
+        .bc-icon {
+          width: 36px;
+          height: 36px;
+          border-radius: 10px;
+          background: var(--secondary-background-color);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 18px;
+          flex-shrink: 0;
+        }
+        .bc-titles {
+          min-width: 0;
+          flex: 1;
+        }
+        .bc-title {
+          font-size: 14px;
+          font-weight: 600;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .bc-sub {
+          font-size: 11px;
+          color: var(--secondary-text-color);
+          margin-top: 2px;
+        }
+        .bc-right {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-shrink: 0;
+        }
+        .bc-badge {
+          font-size: 11px;
+          font-weight: 600;
+          padding: 3px 8px;
+          border-radius: 999px;
+        }
+        .bc-badge.ok {
+          color: var(--success-color, #4caf50);
+          background: rgba(76, 175, 80, 0.14);
+        }
+        .bc-badge.warn {
+          color: var(--error-color, #db4437);
+          background: rgba(219, 68, 55, 0.15);
+        }
+        .bc-refresh {
+          background: none;
+          border: none;
+          color: var(--secondary-text-color);
+          cursor: pointer;
+          font-size: 15px;
+          padding: 4px 6px;
+          border-radius: 6px;
+        }
+        .bc-refresh:hover {
+          background: var(--secondary-background-color);
+          color: var(--primary-text-color);
+        }
+        .bc-chevron {
+          font-size: 10px;
+          color: var(--secondary-text-color);
+        }
+        .bc-list-wrap {
+          margin-top: 10px;
+          padding-top: 8px;
+          border-top: 1px solid var(--divider-color);
+          display: none;
+        }
+        .bc-list {
+          max-height: 260px;
+          overflow-y: auto;
+        }
+        .bc-empty {
+          font-size: 12px;
+          color: var(--secondary-text-color);
+          text-align: center;
+          padding: 8px 4px;
+        }
+        .bc-row {
+          width: 100%;
+          background: none;
+          border: none;
+          color: var(--primary-text-color);
+          cursor: pointer;
+          font-family: inherit;
+          text-align: left;
+          padding: 7px 6px;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          border-bottom: 1px solid var(--divider-color);
+        }
+        .bc-row:last-child {
+          border-bottom: none;
+        }
+        .bc-row:hover {
+          background: var(--secondary-background-color);
+        }
+        .bc-row-left {
+          min-width: 0;
+          flex: 1;
+        }
+        .bc-row-name {
+          font-size: 13px;
+          font-weight: 500;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .bc-bar-bg {
+          width: 100%;
+          height: 4px;
+          border-radius: 2px;
+          background: var(--secondary-background-color);
+          margin-top: 4px;
+          overflow: hidden;
+        }
+        .bc-bar-fill {
+          height: 100%;
+          background: var(--error-color, #db4437);
+          border-radius: 2px;
+        }
+        .bc-pct {
+          font-size: 13px;
+          font-weight: 700;
+          color: var(--error-color, #db4437);
+          font-variant-numeric: tabular-nums;
+          flex-shrink: 0;
+        }
+      </style>
+      <ha-card>
+        <div id="bc-header" class="bc-header">
+          <div class="bc-left">
+            <div class="bc-icon">🔋</div>
+            <div class="bc-titles">
+              <div id="bc-title" class="bc-title">Batterie-Check</div>
+              <div id="bc-sub" class="bc-sub"></div>
+            </div>
+          </div>
+          <div class="bc-right">
+            <span id="bc-badge" class="bc-badge ok">OK</span>
+            <button id="bc-refresh" class="bc-refresh" type="button" title="Jetzt prüfen">↻</button>
+            <span id="bc-chevron" class="bc-chevron">▼</span>
+          </div>
+        </div>
+        <div id="bc-list-wrap" class="bc-list-wrap">
+          <div id="bc-list" class="bc-list"></div>
+        </div>
+      </ha-card>
+    `;
+
+    this.shadowRoot.getElementById("bc-header").addEventListener("click", () => {
+      this._open = !this._open;
+      this._render();
+    });
+    this.shadowRoot.getElementById("bc-refresh").addEventListener("click", (ev) => {
+      this._refreshNow(ev);
+    });
+  }
+}
+
+if (!customElements.get("wohnsinnig-vernetzt-battery-card")) {
+  customElements.define("wohnsinnig-vernetzt-battery-card", WohnsinnigVernetztBatteryCard);
+}
+if (!window.customCards.some((c) => c.type === "wohnsinnig-vernetzt-battery-card")) {
+  window.customCards.push({
+    type: "wohnsinnig-vernetzt-battery-card",
+    name: "Wohnsinnig vernetzt Batterie-Check",
+    description: "Zeigt beim Anklicken alle Geräte mit weniger als 15 % Batteriestand an.",
   });
 }
