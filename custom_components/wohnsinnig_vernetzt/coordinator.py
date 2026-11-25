@@ -199,6 +199,11 @@ def _parse_rss(xml_text: str, override_logo_url: str = "") -> dict:
             }
         )
 
+    # Episodennummern chronologisch zuweisen (älteste = 1, neueste = Anzahl Folgen, z. B. 23)
+    total_episodes = len(episodes)
+    for pos, ep in enumerate(episodes):
+        ep["episode_number"] = total_episodes - pos
+
     return {
         "title": podcast_title,
         "description": podcast_desc,
@@ -639,6 +644,45 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             prev = self.data or {}
             return prev.get("blueprints", []), prev.get("infographics", [])
 
+    async def _async_ensure_episode_infographic(
+        self,
+        session: aiohttp.ClientSession,
+        episode_number: int,
+        infographics: list[dict],
+    ) -> list[dict]:
+        """Prüft direkt auf <episode_number>.jpeg/.jpg/.png, falls index.html noch nicht aktualisiert wurde."""
+        if any(item.get("episode_number") == episode_number for item in infographics):
+            return infographics
+        if not self.blueprints_url:
+            return infographics
+
+        base_dir = self.blueprints_url.rstrip("/") + "/"
+        for ext in ("jpeg", "jpg", "png"):
+            candidate_url = f"{base_dir}{episode_number}.{ext}"
+            try:
+                async with session.head(
+                    candidate_url,
+                    timeout=aiohttp.ClientTimeout(total=8),
+                    headers=HTTP_HEADERS,
+                    allow_redirects=True,
+                ) as resp:
+                    ctype = (resp.headers.get("Content-Type") or "").lower()
+                    if resp.status == 200 and ctype.startswith("image/"):
+                        found = {
+                            "episode_number": episode_number,
+                            "filename": f"{episode_number}.{ext}",
+                            "url": str(resp.url),
+                            "title": f"Folge {episode_number} – Infografik",
+                        }
+                        return sorted(
+                            [found, *infographics],
+                            key=lambda item: item["episode_number"],
+                            reverse=True,
+                        )
+            except (aiohttp.ClientError, TimeoutError):
+                continue
+        return infographics
+
     async def _async_fetch_alerts(self, session: aiohttp.ClientSession) -> list[dict]:
         """Lädt optionale Smart-Home-Eilmeldungen (leise bei 404, kein Log-Spam)."""
         if not self.alerts_url:
@@ -1000,6 +1044,12 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             ) from err
 
         blueprints, infographics = await self._async_fetch_website_assets(session)
+        if data["episodes"]:
+            latest_num = data["episodes"][0].get("episode_number")
+            if isinstance(latest_num, int) and latest_num > 0:
+                infographics = await self._async_ensure_episode_infographic(
+                    session, latest_num, infographics
+                )
         alerts = await self._async_fetch_alerts(session)
 
         data["blueprints"] = blueprints

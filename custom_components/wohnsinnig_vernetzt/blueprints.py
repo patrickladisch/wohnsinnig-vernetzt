@@ -632,33 +632,23 @@ def _read_local_hash(path: Path) -> str:
         return ""
 
 
-_IMAGE_URL_RE = re.compile(
-    r"""(?P<q>["'`])(?P<url>(?:https?://|(?:\.\.?/|/|[a-zA-Z0-9_-]+/))[^"'`<>\n\r]+?\.(?:png|jpe?g|webp)(?:\?[^"'`<>\n\r]*)?)(?P=q)""",
+# Erkennt numerische Episoden-Infografiken wie '23.jpeg', '18.jpg', '3.png' oder '/pfad/23.jpeg'
+_NUMERIC_IMAGE_RE = re.compile(
+    r"""(?P<q>["'`])(?P<url>(?:(?:https?://|(?:\.\.?/|/|[a-zA-Z0-9_-]+/)*)?)(?P<num>\d+)\.(?:jpe?g|png)(?:\?[^"'`<>\n\r]*)?)(?P=q)""",
     re.IGNORECASE,
 )
-
-_IGNORED_IMAGE_HINTS = (
-    "logo",
-    "favicon",
-    "apple-touch",
-    "icon",
-    "avatar",
-    "instagram",
-    "spotify",
-    "badge",
-    "spinner",
-    "placeholder",
-)
+_NUMERIC_STEM_RE = re.compile(r"^(\d+)\.(?:jpe?g|png)$", re.IGNORECASE)
 
 
-def _is_infographic_candidate(url: str, alt: str = "") -> bool:
-    low_url = unquote(url).lower()
-    low_alt = (alt or "").lower()
-    if any(bad in low_url for bad in _IGNORED_IMAGE_HINTS):
-        return False
-    if low_alt in ("logo", "wohnsinnig vernetzt", "instagram"):
-        return False
-    return True
+def _extract_numeric_episode_from_url(url: str) -> int | None:
+    """Gibt die Episodennummer zurück, falls der Dateiname rein numerisch ist (z. B. 23.jpeg -> 23)."""
+    parsed = urlparse(url)
+    filename = Path(unquote(parsed.path)).name
+    match = _NUMERIC_STEM_RE.match(filename)
+    if not match:
+        return None
+    num = int(match.group(1))
+    return num if num > 0 else None
 
 
 def _normalize_image_url(raw_url: str, base_url: str) -> str:
@@ -676,25 +666,30 @@ def _normalize_image_url(raw_url: str, base_url: str) -> str:
 
 
 class _InfographicHTMLParser(HTMLParser):
-    """Sammelt Episoden-Infografiken aus <img>-Tags und JS/Alpine-Galerie-Blöcken."""
+    """Sammelt ausschließlich numerische Episoden-Infografiken (<nummer>.jpg/.jpeg/.png)."""
 
     def __init__(self, base_url: str) -> None:
         super().__init__(convert_charrefs=True)
         self.base_url = base_url
-        self.images: list[dict] = []
-        self._seen: set[str] = set()
+        self.by_number: dict[int, dict] = {}
         self._in_script = False
         self.js_blobs: list[str] = []
 
-    def _add(self, raw_url: str, title: str = "") -> None:
+    def _add_candidate(self, raw_url: str) -> None:
         norm = _normalize_image_url(raw_url, self.base_url)
-        if not norm or norm in self._seen:
+        if not norm:
             return
-        if not _is_infographic_candidate(norm, title):
+        ep_num = _extract_numeric_episode_from_url(norm)
+        if ep_num is None:
             return
-        self._seen.add(norm)
-        clean_title = (title or "").strip() or _prettify_filename(norm)
-        self.images.append({"url": norm, "title": clean_title[:160]})
+        if ep_num not in self.by_number:
+            fname = Path(unquote(urlparse(norm).path)).name
+            self.by_number[ep_num] = {
+                "episode_number": ep_num,
+                "filename": fname,
+                "url": norm,
+                "title": f"Folge {ep_num} – Infografik",
+            }
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         ltag = tag.lower()
@@ -702,16 +697,15 @@ class _InfographicHTMLParser(HTMLParser):
         if ltag == "script":
             self._in_script = True
         if ltag == "img":
-            alt = attrs_dict.get("alt") or attrs_dict.get("title") or ""
             for key in ("src", "data-src", "data-full", "data-image"):
                 val = attrs_dict.get(key, "").strip()
-                if val and not val.startswith("{") and ".svg" not in val.lower():
-                    self._add(val, alt)
+                if val and not val.startswith("{"):
+                    self._add_candidate(val)
         for attr_name, attr_val in attrs_dict.items():
             if not attr_val:
                 continue
             if attr_name in ("x-data", "x-init", "onclick", "@click") and any(
-                ext in attr_val.lower() for ext in (".png", ".jpg", ".jpeg", ".webp")
+                ext in attr_val.lower() for ext in (".png", ".jpg", ".jpeg")
             ):
                 self.js_blobs.append(attr_val)
 
@@ -725,62 +719,36 @@ class _InfographicHTMLParser(HTMLParser):
 
 
 def parse_infographics_from_html(raw_html: str, base_url: str) -> list[dict]:
-    """Extrahiert alle Infografik-Bilder von wohnsinnigvernetzt.de."""
+    """Extrahiert alle numerischen Episoden-Infografiken (z. B. 23.jpeg) absteigend sortiert."""
     parser = _InfographicHTMLParser(base_url)
     parser.feed(raw_html)
 
-    results = list(parser.images)
-    seen = {img["url"] for img in results}
-
     for blob in parser.js_blobs:
         cleaned = html_lib.unescape(blob).replace("\\/", "/")
-        for match in _IMAGE_URL_RE.finditer(cleaned):
-            norm = _normalize_image_url(match.group("url"), base_url)
-            if not norm or norm in seen:
-                continue
-            if not _is_infographic_candidate(norm):
-                continue
-            seen.add(norm)
-            obj_slice = _slice_enclosing_js_object(cleaned, match.start(), match.end())
-            t_match = re.search(
-                r"""(?:["']?(?:title|name|caption|alt|titel)["']?)\s*:\s*(?P<q>["'`])(?P<val>[^"'`]{2,160})(?P=q)""",
-                obj_slice,
-                re.IGNORECASE,
-            )
-            title = t_match.group("val").strip() if t_match else _prettify_filename(norm)
-            results.append({"url": norm, "title": title[:160]})
+        for match in _NUMERIC_IMAGE_RE.finditer(cleaned):
+            parser._add_candidate(match.group("url"))
 
-    return results
-
-
-def _tokenize_title(text: str) -> set[str]:
-    words = re.findall(r"[a-zäöüß0-9]{3,}", (text or "").lower())
-    stop = {"und", "der", "die", "das", "mit", "für", "von", "aus", "ein", "eine", "teil", "home", "assistant", "folge"}
-    return {w for w in words if w not in stop}
+    return sorted(
+        parser.by_number.values(),
+        key=lambda item: item["episode_number"],
+        reverse=True,
+    )
 
 
 def match_episode_infographic(
     episode: dict | None, infographics: list[dict]
 ) -> dict | None:
-    """Findet die am besten passende Infografik zu einer Podcast-Folge (oder die neueste)."""
+    """Ordnet jeder Episode exakt das Bild mit derselben Episodennummer zu (z. B. Folge 23 -> 23.jpeg)."""
     if not infographics:
         return None
     if not episode:
         return infographics[0]
 
-    ep_tokens = _tokenize_title(episode.get("title", ""))
-    best_item = None
-    best_score = 0
+    ep_num = episode.get("episode_number")
+    if isinstance(ep_num, int) and ep_num > 0:
+        for item in infographics:
+            if item.get("episode_number") == ep_num:
+                return item
+        return None
 
-    for item in infographics:
-        item_tokens = _tokenize_title(
-            f"{item.get('title', '')} {Path(unquote(urlparse(item['url']).path)).stem}"
-        )
-        score = len(ep_tokens & item_tokens)
-        if score > best_score:
-            best_score = score
-            best_item = item
-
-    if best_item and best_score >= 1:
-        return best_item
     return infographics[0]

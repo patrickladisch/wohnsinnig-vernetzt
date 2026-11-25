@@ -75,11 +75,15 @@ class WohnsinnigVernetztInfographicImage(WohnsinnigVernetztEntity, ImageEntity):
     def extra_state_attributes(self) -> dict:
         url, title = self._resolve_info()
         ep = self.coordinator.get_selected_episode() or {}
+        matched = self.coordinator.get_current_infographic()
         return {
+            "episode_number": ep.get("episode_number"),
+            "episode_title": ep.get("title", ""),
+            "has_infographic": matched is not None,
+            "infographic_filename": matched.get("filename", "") if matched else "",
             "image_url": url,
             "infographic_title": title,
             "infographics_count": len(self.coordinator.get_infographics()),
-            "episode_title": ep.get("title", ""),
         }
 
     def _read_fallback_logo(self) -> bytes | None:
