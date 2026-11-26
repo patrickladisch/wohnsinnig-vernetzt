@@ -22,6 +22,9 @@ from .const import (
     CARD_FILENAME,
     CARD_URL_BASE,
     CONF_ALERTS_URL,
+    CONF_BATTERY_PUSH_ENABLED,
+    CONF_BATTERY_PUSH_MODE,
+    CONF_BATTERY_PUSH_TIME,
     CONF_BATTERY_THRESHOLD,
     CONF_BLUEPRINTS_URL,
     CONF_DEFAULT_TARGET,
@@ -30,14 +33,19 @@ from .const import (
     CONF_NOTIFY_SERVICES,
     CONF_RSS_URL,
     CONF_SCAN_INTERVAL,
+    CONF_SILENT_HOURS,
     CONF_SPOTIFY_SHOW_URL,
     DEFAULT_ALERTS_URL,
+    DEFAULT_BATTERY_PUSH_ENABLED,
+    DEFAULT_BATTERY_PUSH_MODE,
+    DEFAULT_BATTERY_PUSH_TIME,
     DEFAULT_BATTERY_THRESHOLD,
     DEFAULT_BLUEPRINTS_URL,
     DEFAULT_LOGO_URL,
     DEFAULT_NOTIFY_SERVICES,
     DEFAULT_RSS_URL,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SILENT_HOURS,
     DEFAULT_SPOTIFY_SHOW_URL,
     DEVICE_CONFIG_URL,
     DEVICE_MANUFACTURER,
@@ -46,7 +54,9 @@ from .const import (
     DOMAIN,
     SERVICE_IMPORT_BLUEPRINT,
     SERVICE_MARK_EPISODE_SEEN,
+    SERVICE_RESET_BATTERY_PUSH_MEMORY,
     SERVICE_RUN_BATTERY_CHECK,
+    SERVICE_RUN_SILENT_SENSORS_CHECK,
     VERSION,
 )
 from .coordinator import WohnsinnigVernetztCoordinator, normalize_notify_services
@@ -56,6 +66,8 @@ PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.SELECT,
     Platform.SWITCH,
+    Platform.NUMBER,
+    Platform.TIME,
     Platform.BUTTON,
     Platform.EVENT,
     Platform.UPDATE,
@@ -71,6 +83,12 @@ IMPORT_BLUEPRINT_SCHEMA = vol.Schema(
 )
 
 RUN_BATTERY_CHECK_SCHEMA = vol.Schema(
+    {
+        vol.Optional("notify", default=False): bool,
+    }
+)
+
+RUN_SILENT_SENSORS_SCHEMA = vol.Schema(
     {
         vol.Optional("notify", default=False): bool,
     }
@@ -110,7 +128,12 @@ class WohnsinnigVernetztEpisodesView(HomeAssistantView):
         return self.json(
             {
                 **coordinator.data,
-                "battery_check": coordinator.battery_check_result,
+                "battery_check": {
+                    k: v
+                    for k, v in coordinator.battery_check_result.items()
+                    if k != "all_battery_levels"
+                },
+                "silent_sensors": coordinator.silent_sensors_result,
                 "spotify_show_id": coordinator.spotify_show_id,
                 "spotify_show_url": coordinator.spotify_show_url,
                 "target_entity": coordinator.target_entity,
@@ -212,6 +235,26 @@ class WohnsinnigVernetztBatteryCheckView(HomeAssistantView):
             return self.json({"error": "Integration nicht geladen."}, status_code=503)
 
         result = await coordinator.async_run_battery_check(notify=False)
+        return self.json({k: v for k, v in result.items() if k != "all_battery_levels"})
+
+
+class WohnsinnigVernetztSilentSensorsView(HomeAssistantView):
+    """Führt beim Klick in der Dashboard-Karte sofort einen Live-Stille-Sensoren-Check aus."""
+
+    url = f"/api/{DOMAIN}/silent_sensors"
+    name = f"api:{DOMAIN}:silent_sensors"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        domain_data = hass.data.get(DOMAIN, {})
+        coordinator: WohnsinnigVernetztCoordinator | None = domain_data.get(
+            "coordinator"
+        )
+        if coordinator is None:
+            return self.json({"error": "Integration nicht geladen."}, status_code=503)
+
+        result = await coordinator.async_run_silent_sensors_check(notify=False)
         return self.json(result)
 
 
@@ -269,6 +312,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(WohnsinnigVernetztPlayerStateView())
         hass.http.register_view(WohnsinnigVernetztImportBlueprintView())
         hass.http.register_view(WohnsinnigVernetztBatteryCheckView())
+        hass.http.register_view(WohnsinnigVernetztSilentSensorsView())
         domain_data["frontend_registered"] = True
 
     config = {**entry.data, **entry.options}
@@ -293,10 +337,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         battery_threshold=int(
             config.get(CONF_BATTERY_THRESHOLD, DEFAULT_BATTERY_THRESHOLD)
         ),
+        silent_hours=int(config.get(CONF_SILENT_HOURS, DEFAULT_SILENT_HOURS)),
+        battery_push_enabled=bool(
+            config.get(CONF_BATTERY_PUSH_ENABLED, DEFAULT_BATTERY_PUSH_ENABLED)
+        ),
+        battery_push_mode=str(
+            config.get(CONF_BATTERY_PUSH_MODE, DEFAULT_BATTERY_PUSH_MODE)
+        ),
+        battery_push_time=str(
+            config.get(CONF_BATTERY_PUSH_TIME, DEFAULT_BATTERY_PUSH_TIME)
+        ),
         default_target=config.get(CONF_DEFAULT_TARGET, BROWSER_TARGET),
     )
 
     await coordinator.async_config_entry_first_refresh()
+    coordinator.setup_battery_push_schedule()
+    entry.async_on_unload(coordinator.async_shutdown_timers)
     domain_data["coordinator"] = coordinator
     domain_data[entry.entry_id] = coordinator
 
@@ -312,14 +368,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.bus.async_listen("mobile_app_notification_action", _handle_mobile_app_action)
     )
 
-    # Ersten Batterie-Check nach vollständigem HA-Start ausführen (vermeidet Boot-Fehlalarme)
+    # Erste lokale Checks nach vollständigem HA-Start ausführen (vermeidet Boot-Fehlalarme)
     if not hass.is_running:
-        async def _run_initial_battery_check(_event: Event) -> None:
+        async def _run_initial_local_checks(_event: Event) -> None:
             await coordinator.async_run_battery_check(notify=False)
+            await coordinator.async_run_silent_sensors_check(notify=False)
 
         entry.async_on_unload(
             hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_STARTED, _run_initial_battery_check
+                EVENT_HOMEASSISTANT_STARTED, _run_initial_local_checks
             )
         )
 
@@ -376,6 +433,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             schema=RUN_BATTERY_CHECK_SCHEMA,
         )
 
+    if not hass.services.has_service(DOMAIN, SERVICE_RUN_SILENT_SENSORS_CHECK):
+        async def _handle_run_silent_sensors_check(call: ServiceCall) -> None:
+            coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
+                DOMAIN, {}
+            ).get("coordinator")
+            if coord is None:
+                raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
+            await coord.async_run_silent_sensors_check(
+                notify=bool(call.data.get("notify", False))
+            )
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RUN_SILENT_SENSORS_CHECK,
+            _handle_run_silent_sensors_check,
+            schema=RUN_SILENT_SENSORS_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_RESET_BATTERY_PUSH_MEMORY):
+        async def _handle_reset_battery_memory(call: ServiceCall) -> None:
+            coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
+                DOMAIN, {}
+            ).get("coordinator")
+            if coord is None:
+                raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
+            await coord.async_reset_battery_push_memory()
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RESET_BATTERY_PUSH_MEMORY,
+            _handle_reset_battery_memory,
+        )
+
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -397,6 +487,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_IMPORT_BLUEPRINT,
             SERVICE_MARK_EPISODE_SEEN,
             SERVICE_RUN_BATTERY_CHECK,
+            SERVICE_RUN_SILENT_SENSORS_CHECK,
+            SERVICE_RESET_BATTERY_PUSH_MEMORY,
         ):
             if hass.services.has_service(DOMAIN, svc):
                 hass.services.async_remove(DOMAIN, svc)

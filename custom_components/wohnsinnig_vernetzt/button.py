@@ -26,6 +26,7 @@ async def async_setup_entry(
             WohnsinnigVernetztImportAllBlueprintsButton(coordinator, entry.entry_id),
             WohnsinnigVernetztMarkSeenButton(coordinator, entry.entry_id),
             WohnsinnigVernetztBatteryCheckButton(coordinator, entry.entry_id),
+            WohnsinnigVernetztSilentSensorsButton(coordinator, entry.entry_id),
             WohnsinnigVernetztTestNotifyButton(coordinator, entry.entry_id),
             WohnsinnigVernetztRefreshButton(coordinator, entry.entry_id),
         ]
@@ -123,3 +124,19 @@ class WohnsinnigVernetztRefreshButton(WohnsinnigVernetztEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self.coordinator.async_request_refresh()
+
+
+class WohnsinnigVernetztSilentSensorsButton(WohnsinnigVernetztEntity, ButtonEntity):
+    """Prüft sofort alle Sensoren auf Zigbee-Freeze (> eingestellte Stunden ohne Update)."""
+
+    _attr_name = "Stille Sensoren prüfen"
+    _attr_icon = "mdi:radar"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "run_silent_sensors_check")
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_run_silent_sensors_check(notify=True)

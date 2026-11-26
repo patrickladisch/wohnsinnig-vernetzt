@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Set up Wohnsinnig vernetzt",
-        "description": "Configure push notifications, RSS feed, blueprints, community alerts, and local battery check.",
+        "description": "Configure podcast, push notifications, battery check, silent sensors monitor, blueprints, and alerts.",
         "data": {
           "rss_url": "Podcast RSS URL",
           "notify_services": "Phone / push notification for new episodes",
@@ -12,7 +12,11 @@
           "battery_threshold": "Battery check: alert threshold (below %)",
           "scan_interval": "Update interval (minutes)",
           "spotify_show_url": "Spotify Show URL (optional)",
-          "logo_url": "Logo URL (default: built-in logo)"
+          "logo_url": "Logo URL (default: built-in logo)",
+          "battery_push_enabled": "Proactive battery push enabled (anti-spam)",
+          "battery_push_mode": "Battery push mode",
+          "battery_push_time": "Daily time for bundled battery push",
+          "silent_hours": "Silent sensors: alert threshold (hours without update)"
         }
       }
     },
@@ -32,7 +36,11 @@
           "battery_threshold": "Battery check: alert threshold (below %)",
           "scan_interval": "Update interval (minutes)",
           "spotify_show_url": "Spotify Show URL (optional)",
-          "logo_url": "Logo URL"
+          "logo_url": "Logo URL",
+          "battery_push_enabled": "Proactive battery push enabled (anti-spam)",
+          "battery_push_mode": "Battery push mode",
+          "battery_push_time": "Daily time for bundled battery push",
+          "silent_hours": "Silent sensors: alert threshold (hours without update)"
         }
       }
     }

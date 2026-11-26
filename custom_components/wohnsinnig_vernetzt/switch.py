@@ -24,6 +24,7 @@ async def async_setup_entry(
         [
             WohnsinnigVernetztNotifySwitch(coordinator, entry.entry_id),
             WohnsinnigVernetztAlertsSwitch(coordinator, entry.entry_id),
+            WohnsinnigVernetztBatteryPushSwitch(coordinator, entry.entry_id),
         ]
     )
 
@@ -78,3 +79,40 @@ class WohnsinnigVernetztAlertsSwitch(WohnsinnigVernetztEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_alerts_enabled(False)
+
+
+class WohnsinnigVernetztBatteryPushSwitch(WohnsinnigVernetztEntity, SwitchEntity):
+    """Schaltet proaktive Batterie-Push-Meldungen (ohne Spam) ein oder aus."""
+
+    _attr_name = "Batterie-Push aktiv"
+    _attr_icon = "mdi:battery-alert"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "battery_push_enabled")
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.battery_push_enabled
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "modus": self.coordinator.battery_push_mode,
+            "uhrzeit": self.coordinator.battery_push_time,
+            "grenze": f"< {self.coordinator.battery_threshold} %",
+            "reset_ab": f"≥ {self.coordinator.get_battery_reset_threshold()} %",
+            "bereits_gemeldet_anzahl": len(self.coordinator.notified_low_batteries),
+            "bereits_gemeldet": [
+                f"{info.get('name', key)} ({info.get('level', '?')} %)"
+                for key, info in self.coordinator.notified_low_batteries.items()
+            ],
+        }
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_battery_push_enabled(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_battery_push_enabled(False)

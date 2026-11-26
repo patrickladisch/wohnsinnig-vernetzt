@@ -10,7 +10,14 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import BROWSER_TARGET, BROWSER_TARGET_LABEL, DOMAIN, NOTIFY_NONE
+from .const import (
+    BATTERY_PUSH_MODE_LABELS,
+    BATTERY_PUSH_MODE_SCHEDULED,
+    BROWSER_TARGET,
+    BROWSER_TARGET_LABEL,
+    DOMAIN,
+    NOTIFY_NONE,
+)
 from .coordinator import WohnsinnigVernetztCoordinator
 from .entity import WohnsinnigVernetztEntity
 from .media_player import get_available_targets
@@ -68,6 +75,8 @@ async def async_setup_entry(
             WohnsinnigVernetztNotifyDeviceSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztBlueprintSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztBatteryListSelect(coordinator, entry.entry_id),
+            WohnsinnigVernetztSilentSensorsSelect(coordinator, entry.entry_id),
+            WohnsinnigVernetztBatteryPushModeSelect(coordinator, entry.entry_id),
         ]
     )
 
@@ -352,3 +361,100 @@ class WohnsinnigVernetztBatteryListSelect(WohnsinnigVernetztEntity, SelectEntity
         else:
             # Dropdown schließt sauber und zeigt weiterhin die Übersicht im Kopf
             self.async_write_ha_state()
+
+
+class WohnsinnigVernetztSilentSensorsSelect(WohnsinnigVernetztEntity, SelectEntity):
+    """1-Klick-Dropdown direkt auf der Geräteseite mit allen stillen Sensoren."""
+
+    _attr_name = "Stille Sensoren: Übersicht"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "silent_sensors_list")
+
+    @property
+    def icon(self) -> str:
+        count = self.coordinator.silent_sensors_result.get("silent_count", 0)
+        return "mdi:sleep" if count > 0 else "mdi:access-point-check"
+
+    def _header_label(self) -> str:
+        res = self.coordinator.silent_sensors_result
+        count = res.get("silent_count", 0)
+        hours = res.get("silent_hours", self.coordinator.silent_hours)
+        if count == 0:
+            return f"✅ Alle aktiv (< {hours} h)"
+        if count == 1:
+            return f"🤫 1 Sensor > {hours} h"
+        return f"🤫 {count} Sensoren > {hours} h"
+
+    def _build_options(self) -> list[str]:
+        res = self.coordinator.silent_sensors_result
+        devices = res.get("devices", [])
+        header = self._header_label()
+        mapping: dict[str, bool] = {header: True}
+
+        for dev in devices:
+            dur = dev.get("compact_duration") or f"{int(dev.get('hours_silent', 0))}h"
+            prefix = f"{dur} · "
+            budget = max(8, MAX_SELECT_LABEL_LEN - len(prefix))
+            short_name = compact_select_label(dev["name"], budget)
+            label = _dedupe_label(f"{prefix}{short_name}", mapping, MAX_SELECT_LABEL_LEN)
+            mapping[label] = True
+
+        mapping["🔄 Jetzt neu prüfen"] = True
+        return list(mapping.keys())
+
+    @property
+    def options(self) -> list[str]:
+        return self._build_options()
+
+    @property
+    def current_option(self) -> str | None:
+        return self._header_label()
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        res = self.coordinator.silent_sensors_result
+        return {
+            "anzahl": res.get("silent_count", 0),
+            "schwellwert": f"> {res.get('silent_hours', self.coordinator.silent_hours)} h",
+            "geprueft_am": res.get("checked_at", ""),
+            "geraete": res.get("geraete", []),
+        }
+
+    async def async_select_option(self, option: str) -> None:
+        if option == "🔄 Jetzt neu prüfen":
+            await self.coordinator.async_run_silent_sensors_check(notify=False)
+        else:
+            self.async_write_ha_state()
+
+
+class WohnsinnigVernetztBatteryPushModeSelect(WohnsinnigVernetztEntity, SelectEntity):
+    """Wählt zwischen gebündeltem Tages-Push und sofortigem Push bei schwacher Batterie."""
+
+    _attr_name = "Batterie-Push Modus"
+    _attr_icon = "mdi:bell-cog-outline"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "battery_push_mode")
+
+    @property
+    def options(self) -> list[str]:
+        return list(BATTERY_PUSH_MODE_LABELS.values())
+
+    @property
+    def current_option(self) -> str:
+        return BATTERY_PUSH_MODE_LABELS.get(
+            self.coordinator.battery_push_mode,
+            BATTERY_PUSH_MODE_LABELS[BATTERY_PUSH_MODE_SCHEDULED],
+        )
+
+    async def async_select_option(self, option: str) -> None:
+        for mode_key, label in BATTERY_PUSH_MODE_LABELS.items():
+            if label == option:
+                await self.coordinator.async_set_battery_push_mode(mode_key)
+                return

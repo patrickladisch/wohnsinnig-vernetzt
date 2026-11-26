@@ -22,7 +22,7 @@ mark_episode_seen:
 
 run_battery_check:
   name: Batterie-Check ausführen
-  description: Prüft lokal alle Batterien unter 15 % (bzw. unter dem konfigurierten Schwellwert) und listet alle betroffenen Geräte auf.
+  description: Prüft lokal alle Batterien unter der eingestellten Grenze (Standard 15 %) und listet alle betroffenen Geräte auf.
   fields:
     notify:
       name: Geräteliste als HA-Benachrichtigung anzeigen
@@ -31,3 +31,19 @@ run_battery_check:
       default: false
       selector:
         boolean:
+
+run_silent_sensors_check:
+  name: Stille Sensoren prüfen
+  description: Prüft lokal alle physischen Sensoren auf Zigbee-Freeze (keine Meldung seit mehr als der eingestellten Stundenzahl).
+  fields:
+    notify:
+      name: Liste als HA-Benachrichtigung anzeigen
+      description: Zeigt alle stillen Sensoren direkt in den Home-Assistant-Benachrichtigungen an.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+reset_battery_push_memory:
+  name: Batterie-Push-Speicher zurücksetzen
+  description: Setzt die Anti-Spam-Sperre zurück, sodass aktuell schwache Batterien beim nächsten Check erneut per Push gemeldet werden.

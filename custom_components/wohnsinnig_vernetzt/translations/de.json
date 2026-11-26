@@ -3,16 +3,20 @@
     "step": {
       "user": {
         "title": "Wohnsinnig vernetzt einrichten",
-        "description": "Konfiguriere Push-Benachrichtigungen, RSS-Feed, Blueprints, Eilmeldungen und den lokalen Batterie-Check.",
+        "description": "Konfiguriere Podcast, Push-Benachrichtigungen, Batterie-Check, Stille-Sensoren-Wächter, Blueprints und Eilmeldungen.",
         "data": {
           "rss_url": "Podcast RSS-URL",
           "notify_services": "Handy / Push-Benachrichtigung bei neuen Folgen",
           "blueprints_url": "Blueprints- & Website-URL",
           "alerts_url": "Eilmeldungen-JSON-URL (optional)",
-          "battery_threshold": "Batterie-Check: Warnschwelle (unter %)",
+          "battery_threshold": "Batterie-Check: Warngrenze (unter %)",
           "scan_interval": "Abrufintervall (Minuten)",
           "spotify_show_url": "Spotify-Show-URL (optional)",
-          "logo_url": "Logo-URL (Standard: lokales Logo der Integration)"
+          "logo_url": "Logo-URL (Standard: lokales Logo der Integration)",
+          "battery_push_enabled": "Proaktiver Batterie-Push aktiv (ohne Spam)",
+          "battery_push_mode": "Batterie-Push Modus",
+          "battery_push_time": "Uhrzeit für gebündelten Batterie-Push",
+          "silent_hours": "Stille Sensoren: Meldegrenze (Stunden ohne Update)"
         }
       }
     },
@@ -29,10 +33,14 @@
           "notify_services": "Handy / Push-Benachrichtigung bei neuen Folgen",
           "blueprints_url": "Blueprints- & Website-URL",
           "alerts_url": "Eilmeldungen-JSON-URL (optional)",
-          "battery_threshold": "Batterie-Check: Warnschwelle (unter %)",
+          "battery_threshold": "Batterie-Check: Warngrenze (unter %)",
           "scan_interval": "Abrufintervall (Minuten)",
           "spotify_show_url": "Spotify-Show-URL (optional)",
-          "logo_url": "Logo-URL"
+          "logo_url": "Logo-URL",
+          "battery_push_enabled": "Proaktiver Batterie-Push aktiv (ohne Spam)",
+          "battery_push_mode": "Batterie-Push Modus",
+          "battery_push_time": "Uhrzeit für gebündelten Batterie-Push",
+          "silent_hours": "Stille Sensoren: Meldegrenze (Stunden ohne Update)"
         }
       }
     }

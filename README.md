@@ -2,12 +2,13 @@
 
 Die offizielle Smart-Home-Integration zum Podcast **Wohnsinnig vernetzt** (von Niels und Patrick – [wohnsinnigvernetzt.de](https://www.wohnsinnigvernetzt.de)).
 
-## Features (v2.1.0)
+## Features (v2.2.0)
 - **Podcast-Player & Episodenliste:** Kompakte Dashboard-Karte (`custom:wohnsinnig-vernetzt-card`) zum direkten Anhören sowie eine native `media_player`-Entität für Lautsprecher im Haus.
 - **Native Blueprint-Updates:** Importiert alle Blueprints von `wohnsinnigvernetzt.de` per Klick direkt nach Home Assistant und überwacht installierte Blueprints über eine native `update`-Entität – inklusive 1-Klick-Update unter *Einstellungen → Updates*.
 - **Interaktive Push-Nachrichten mit Episoden-Infografik:** Stellt die Episoden-Infografik als `image`-Entität bereit und schickt bei neuen Folgen eine Push-Nachricht mit Vorschaubild sowie zwei direkten Action-Buttons (**▶️ Folge abspielen** und **✅ Als gesehen markieren**) – ganz ohne eigene Automation.
 - **Smart-Home-Eilmeldungen („Niels & Patrick warnen“):** Optional abschaltbarer Hinweis-Sensor + Home Assistant Repair-Hinweis für akute Smart-Home-Warnungen über `alerts.json`.
-- **Lokaler Batterie-Check:** Überwacht 100 % lokal alle Batterien unter 15 % (Schwellwert konfigurierbar) und listet beim Anklicken alle betroffenen Geräte direkt auf.
+- **Batterie-Check & Proaktiver Batterie-Push ohne Spam:** Überwacht lokal alle Batterien unter einer einstellbaren Grenze (Standard: 15 %). Meldet jedes schwache Gerät genau einmal ans gewählte Handy (sofort oder gebündelt zur Wunsch-Uhrzeit) und erst wieder nach einem Batteriewechsel (≥ 50 %).
+- **„Stille Sensoren“-Wächter (Zigbee-Freeze-Erkennung):** Erkennt stumm eingefrorene Sensoren (z. B. Aqara, Hue, Tradfri), die trotz fehlendem `unavailable` seit mehr als 24 oder 48 Stunden (frei einstellbar) kein Update mehr geliefert haben – übersichtlich auf einen Klick.
 
 ## Installation über HACS
 1. **HACS** öffnen → oben rechts auf die **drei Punkte** → **Benutzerdefinierte Repositories**.
@@ -20,6 +21,4 @@ Die offizielle Smart-Home-Integration zum Podcast **Wohnsinnig vernetzt** (von N
 - Podcast-Player: `type: custom:wohnsinnig-vernetzt-card`
 - Blueprint-Manager: `type: custom:wohnsinnig-vernetzt-blueprints-card`
 - Batterie-Check: `type: custom:wohnsinnig-vernetzt-battery-card`
-
-## Format für Smart-Home-Eilmeldungen (`alerts.json`)
-Eine Beispiel-Datei liegt im Repository unter `docs/alerts.example.json`. Lege die Datei unter `https://www.wohnsinnigvernetzt.de/alerts.json` ab – ist sie nicht vorhanden oder sind alle Einträge auf `"active": false`, bleibt alles ruhig.
+- Stille Sensoren: `type: custom:wohnsinnig-vernetzt-silent-sensors-card`

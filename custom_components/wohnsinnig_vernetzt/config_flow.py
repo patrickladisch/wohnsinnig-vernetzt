@@ -9,7 +9,11 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 
 from .const import (
+    BATTERY_PUSH_MODE_LABELS,
     CONF_ALERTS_URL,
+    CONF_BATTERY_PUSH_ENABLED,
+    CONF_BATTERY_PUSH_MODE,
+    CONF_BATTERY_PUSH_TIME,
     CONF_BATTERY_THRESHOLD,
     CONF_BLUEPRINTS_URL,
     CONF_LOGO_URL,
@@ -17,19 +21,24 @@ from .const import (
     CONF_NOTIFY_SERVICES,
     CONF_RSS_URL,
     CONF_SCAN_INTERVAL,
+    CONF_SILENT_HOURS,
     CONF_SPOTIFY_SHOW_URL,
     DEFAULT_ALERTS_URL,
+    DEFAULT_BATTERY_PUSH_ENABLED,
+    DEFAULT_BATTERY_PUSH_MODE,
+    DEFAULT_BATTERY_PUSH_TIME,
     DEFAULT_BATTERY_THRESHOLD,
     DEFAULT_BLUEPRINTS_URL,
     DEFAULT_LOGO_URL,
     DEFAULT_NOTIFY_SERVICES,
     DEFAULT_RSS_URL,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SILENT_HOURS,
     DEFAULT_SPOTIFY_SHOW_URL,
     DOMAIN,
     NOTIFY_NONE,
 )
-from .coordinator import normalize_notify_services
+from .coordinator import normalize_notify_services, parse_hhmm_time
 from .notify_helpers import get_mobile_app_services, get_notify_choices
 
 
@@ -57,6 +66,15 @@ def _build_schema(
         if svc_id != NOTIFY_NONE
     ]
 
+    mode_choices = [
+        selector.SelectOptionDict(value=mode_key, label=label)
+        for mode_key, label in BATTERY_PUSH_MODE_LABELS.items()
+    ]
+
+    default_push_time = parse_hhmm_time(
+        defaults.get(CONF_BATTERY_PUSH_TIME, DEFAULT_BATTERY_PUSH_TIME)
+    ).strftime("%H:%M:%S")
+
     return vol.Schema(
         {
             vol.Required(
@@ -73,6 +91,39 @@ def _build_schema(
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
+            vol.Required(
+                CONF_BATTERY_THRESHOLD,
+                default=int(
+                    defaults.get(CONF_BATTERY_THRESHOLD, DEFAULT_BATTERY_THRESHOLD)
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=5, max=50)),
+            vol.Required(
+                CONF_BATTERY_PUSH_ENABLED,
+                default=bool(
+                    defaults.get(
+                        CONF_BATTERY_PUSH_ENABLED, DEFAULT_BATTERY_PUSH_ENABLED
+                    )
+                ),
+            ): bool,
+            vol.Required(
+                CONF_BATTERY_PUSH_MODE,
+                default=str(
+                    defaults.get(CONF_BATTERY_PUSH_MODE, DEFAULT_BATTERY_PUSH_MODE)
+                ),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=mode_choices,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_BATTERY_PUSH_TIME,
+                default=default_push_time,
+            ): selector.TimeSelector(),
+            vol.Required(
+                CONF_SILENT_HOURS,
+                default=int(defaults.get(CONF_SILENT_HOURS, DEFAULT_SILENT_HOURS)),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=168)),
             vol.Optional(
                 CONF_BLUEPRINTS_URL,
                 default=defaults.get(CONF_BLUEPRINTS_URL) or DEFAULT_BLUEPRINTS_URL,
@@ -81,12 +132,6 @@ def _build_schema(
                 CONF_ALERTS_URL,
                 default=defaults.get(CONF_ALERTS_URL) or DEFAULT_ALERTS_URL,
             ): str,
-            vol.Required(
-                CONF_BATTERY_THRESHOLD,
-                default=int(
-                    defaults.get(CONF_BATTERY_THRESHOLD, DEFAULT_BATTERY_THRESHOLD)
-                ),
-            ): vol.All(vol.Coerce(int), vol.Range(min=5, max=50)),
             vol.Required(
                 CONF_SCAN_INTERVAL,
                 default=int(defaults.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)),
@@ -115,9 +160,13 @@ class WohnsinnigVernetztConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="single_instance_allowed")
 
         if user_input is not None:
+            cleaned = dict(user_input)
+            cleaned[CONF_BATTERY_PUSH_TIME] = parse_hhmm_time(
+                cleaned.get(CONF_BATTERY_PUSH_TIME)
+            ).strftime("%H:%M")
             return self.async_create_entry(
                 title="Wohnsinnig vernetzt",
-                data=user_input,
+                data=cleaned,
             )
 
         return self.async_show_form(
@@ -136,12 +185,21 @@ class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            cleaned = dict(user_input)
+            cleaned[CONF_BATTERY_PUSH_TIME] = parse_hhmm_time(
+                cleaned.get(CONF_BATTERY_PUSH_TIME)
+            ).strftime("%H:%M")
+            return self.async_create_entry(title="", data=cleaned)
 
         current = {**self.config_entry.data, **self.config_entry.options}
         coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
         if coordinator is not None:
             current[CONF_NOTIFY_SERVICES] = list(coordinator.notify_services)
+            current[CONF_BATTERY_THRESHOLD] = coordinator.battery_threshold
+            current[CONF_SILENT_HOURS] = coordinator.silent_hours
+            current[CONF_BATTERY_PUSH_ENABLED] = coordinator.battery_push_enabled
+            current[CONF_BATTERY_PUSH_MODE] = coordinator.battery_push_mode
+            current[CONF_BATTERY_PUSH_TIME] = coordinator.battery_push_time
 
         return self.async_show_form(
             step_id="init",

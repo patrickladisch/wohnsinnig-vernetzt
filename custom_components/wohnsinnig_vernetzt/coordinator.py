@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 import email.utils
 import html
 import logging
@@ -11,10 +11,11 @@ import xml.etree.ElementTree as ET
 
 import aiohttp
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -35,15 +36,24 @@ from .blueprints import (
 from .const import (
     ACTION_MARK_SEEN,
     ACTION_PLAY_LATEST,
+    BATTERY_PUSH_MODE_IMMEDIATE,
+    BATTERY_PUSH_MODE_SCHEDULED,
     BROWSER_TARGET,
     DEFAULT_ALERTS_URL,
+    DEFAULT_BATTERY_PUSH_ENABLED,
+    DEFAULT_BATTERY_PUSH_MODE,
+    DEFAULT_BATTERY_PUSH_TIME,
+    DEFAULT_BATTERY_RESET_MIN,
     DEFAULT_BATTERY_THRESHOLD,
     DEFAULT_BLUEPRINTS_URL,
+    DEFAULT_SILENT_HOURS,
     DOMAIN,
     EVENT_ALERT_RECEIVED,
+    EVENT_BATTERY_CHECK_COMPLETED,
+    EVENT_BATTERY_PUSH_SENT,
     EVENT_BLUEPRINT_IMPORTED,
     EVENT_NEW_EPISODE,
-    EVENT_BATTERY_CHECK_COMPLETED,
+    EVENT_SILENT_SENSORS_COMPLETED,
     NOTIFY_ALL_MOBILE_APPS,
     NOTIFY_NONE,
     SIGNAL_NEW_EPISODE,
@@ -52,6 +62,7 @@ from .const import (
 )
 from .notify_helpers import get_mobile_app_services
 from .battery_check import run_battery_check
+from .silent_sensors import run_silent_sensors_check
 
 _LOGGER = logging.getLogger(__name__)
 ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"
@@ -214,6 +225,24 @@ def _parse_rss(xml_text: str, override_logo_url: str = "") -> dict:
     }
 
 
+
+def parse_hhmm_time(raw: str | time | None, fallback: str = DEFAULT_BATTERY_PUSH_TIME) -> time:
+    """Parst 'HH:MM' oder datetime.time sicher in ein time-Objekt."""
+    if isinstance(raw, time):
+        return time(hour=raw.hour, minute=raw.minute, second=0)
+    text = str(raw or fallback).strip()
+    parts = text.split(":")
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return time(hour=hour, minute=minute, second=0)
+    except (ValueError, IndexError):
+        pass
+    fb_parts = fallback.split(":")
+    return time(hour=int(fb_parts[0]), minute=int(fb_parts[1]), second=0)
+
+
 class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
     """Zentraler Coordinator für Podcast, Blueprint-Updates, Infografiken, Eilmeldungen & Batterie-Check."""
 
@@ -228,6 +257,10 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         blueprints_url: str = DEFAULT_BLUEPRINTS_URL,
         alerts_url: str = DEFAULT_ALERTS_URL,
         battery_threshold: int = DEFAULT_BATTERY_THRESHOLD,
+        silent_hours: int = DEFAULT_SILENT_HOURS,
+        battery_push_enabled: bool = DEFAULT_BATTERY_PUSH_ENABLED,
+        battery_push_mode: str = DEFAULT_BATTERY_PUSH_MODE,
+        battery_push_time: str = DEFAULT_BATTERY_PUSH_TIME,
         default_target: str = BROWSER_TARGET,
     ) -> None:
         super().__init__(
@@ -242,7 +275,28 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.logo_url = logo_url.strip()
         self.spotify_show_url = spotify_show_url.strip()
         self.spotify_show_id = extract_spotify_show_id(self.spotify_show_url)
-        self.battery_threshold = int(battery_threshold or DEFAULT_BATTERY_THRESHOLD)
+
+        self._config_battery_threshold = max(5, min(50, int(battery_threshold or DEFAULT_BATTERY_THRESHOLD)))
+        self.battery_threshold = self._config_battery_threshold
+
+        self._config_silent_hours = max(1, min(168, int(silent_hours or DEFAULT_SILENT_HOURS)))
+        self.silent_hours = self._config_silent_hours
+
+        self._config_battery_push_enabled = bool(battery_push_enabled)
+        self.battery_push_enabled = self._config_battery_push_enabled
+
+        valid_mode = (
+            battery_push_mode
+            if battery_push_mode in (BATTERY_PUSH_MODE_SCHEDULED, BATTERY_PUSH_MODE_IMMEDIATE)
+            else DEFAULT_BATTERY_PUSH_MODE
+        )
+        self._config_battery_push_mode = valid_mode
+        self.battery_push_mode = valid_mode
+
+        norm_time = parse_hhmm_time(battery_push_time).strftime("%H:%M")
+        self._config_battery_push_time = norm_time
+        self.battery_push_time = norm_time
+
         self._config_notify_services = list(notify_services)
         self.notify_services = list(notify_services)
 
@@ -251,6 +305,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self._seen_alert_ids: set[str] = set()
         self._remote_bp_cache: dict[str, dict] = {}
         self._tracked_issue_ids: set[str] = set()
+        self.notified_low_batteries: dict[str, dict] = {}
+        self._unsub_battery_timer: CALLBACK_TYPE | None = None
 
         self.notifications_enabled: bool = True
         self.alerts_enabled: bool = True
@@ -271,6 +327,16 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             "checked_at": "",
             "geraete": [],
             "devices": [],
+            "all_battery_levels": {},
+        }
+        self.silent_sensors_result: dict = {
+            "status": "Ausstehend",
+            "summary_text": "Prüfung ausstehend",
+            "silent_count": 0,
+            "silent_hours": self.silent_hours,
+            "checked_at": "",
+            "geraete": [],
+            "devices": [],
         }
         self._state_loaded: bool = False
 
@@ -285,6 +351,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 self._seen_alert_ids = set(stored["seen_alert_ids"])
             if isinstance(stored.get("remote_bp_cache"), dict):
                 self._remote_bp_cache = stored["remote_bp_cache"]
+            if isinstance(stored.get("notified_low_batteries"), dict):
+                self.notified_low_batteries = dict(stored["notified_low_batteries"])
             if isinstance(stored.get("notifications_enabled"), bool):
                 self.notifications_enabled = stored["notifications_enabled"]
             if isinstance(stored.get("alerts_enabled"), bool):
@@ -299,13 +367,44 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 self.selected_blueprint_id = stored["selected_blueprint_id"]
             if isinstance(stored.get("target_entity"), str) and stored["target_entity"]:
                 self.target_entity = stored["target_entity"]
-            stored_last_cfg = stored.get("last_config_notify_services")
-            stored_notify = stored.get("notify_services")
+
             if (
-                isinstance(stored_notify, list)
-                and stored_last_cfg == self._config_notify_services
+                isinstance(stored.get("notify_services"), list)
+                and stored.get("last_config_notify_services") == self._config_notify_services
             ):
-                self.notify_services = [str(s) for s in stored_notify if s]
+                self.notify_services = [str(s) for s in stored["notify_services"] if s]
+
+            if (
+                isinstance(stored.get("battery_threshold"), int)
+                and stored.get("last_config_battery_threshold") == self._config_battery_threshold
+            ):
+                self.battery_threshold = max(5, min(50, stored["battery_threshold"]))
+
+            if (
+                isinstance(stored.get("silent_hours"), int)
+                and stored.get("last_config_silent_hours") == self._config_silent_hours
+            ):
+                self.silent_hours = max(1, min(168, stored["silent_hours"]))
+
+            if (
+                isinstance(stored.get("battery_push_enabled"), bool)
+                and stored.get("last_config_battery_push_enabled") == self._config_battery_push_enabled
+            ):
+                self.battery_push_enabled = stored["battery_push_enabled"]
+
+            if (
+                isinstance(stored.get("battery_push_mode"), str)
+                and stored["battery_push_mode"] in (BATTERY_PUSH_MODE_SCHEDULED, BATTERY_PUSH_MODE_IMMEDIATE)
+                and stored.get("last_config_battery_push_mode") == self._config_battery_push_mode
+            ):
+                self.battery_push_mode = stored["battery_push_mode"]
+
+            if (
+                isinstance(stored.get("battery_push_time"), str)
+                and stored.get("last_config_battery_push_time") == self._config_battery_push_time
+            ):
+                self.battery_push_time = parse_hhmm_time(stored["battery_push_time"]).strftime("%H:%M")
+
         self._state_loaded = True
 
     async def _async_save_state(self) -> None:
@@ -314,6 +413,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "guids": list(self._seen_guids or []),
                 "seen_alert_ids": list(self._seen_alert_ids),
                 "remote_bp_cache": self._remote_bp_cache,
+                "notified_low_batteries": dict(self.notified_low_batteries),
                 "notifications_enabled": self.notifications_enabled,
                 "alerts_enabled": self.alerts_enabled,
                 "selected_episode_guid": self.selected_episode_guid,
@@ -323,8 +423,98 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "target_entity": self.target_entity,
                 "notify_services": list(self.notify_services),
                 "last_config_notify_services": list(self._config_notify_services),
+                "battery_threshold": self.battery_threshold,
+                "last_config_battery_threshold": self._config_battery_threshold,
+                "silent_hours": self.silent_hours,
+                "last_config_silent_hours": self._config_silent_hours,
+                "battery_push_enabled": self.battery_push_enabled,
+                "last_config_battery_push_enabled": self._config_battery_push_enabled,
+                "battery_push_mode": self.battery_push_mode,
+                "last_config_battery_push_mode": self._config_battery_push_mode,
+                "battery_push_time": self.battery_push_time,
+                "last_config_battery_push_time": self._config_battery_push_time,
             }
         )
+
+    def get_battery_reset_threshold(self) -> int:
+        """Ab diesem Prozentwert gilt eine Batterie als gewechselt (Anti-Spam-Hysterese)."""
+        return max(DEFAULT_BATTERY_RESET_MIN, self.battery_threshold + 15)
+
+    def get_battery_push_time_obj(self) -> time:
+        return parse_hhmm_time(self.battery_push_time)
+
+    def setup_battery_push_schedule(self) -> None:
+        """Registriert bzw. aktualisiert den täglichen Timer für gebündelte Batterie-Pushes."""
+        if self._unsub_battery_timer is not None:
+            self._unsub_battery_timer()
+            self._unsub_battery_timer = None
+
+        if not self.battery_push_enabled or self.battery_push_mode != BATTERY_PUSH_MODE_SCHEDULED:
+            return
+
+        push_t = self.get_battery_push_time_obj()
+
+        async def _scheduled_callback(_now: datetime) -> None:
+            await self.async_run_battery_check(notify=False, is_scheduled_trigger=True)
+
+        self._unsub_battery_timer = async_track_time_change(
+            self.hass,
+            _scheduled_callback,
+            hour=push_t.hour,
+            minute=push_t.minute,
+            second=0,
+        )
+
+    def async_shutdown_timers(self) -> None:
+        """Beendet interne Timer sauber beim Entladen der Integration."""
+        if self._unsub_battery_timer is not None:
+            self._unsub_battery_timer()
+            self._unsub_battery_timer = None
+
+    async def async_set_battery_threshold(self, threshold: int) -> None:
+        """Ändert die Batterie-Grenze (%) live und prüft sofort neu."""
+        self.battery_threshold = max(5, min(50, int(threshold)))
+        await self._async_save_state()
+        await self.async_run_battery_check(notify=False)
+
+    async def async_set_silent_hours(self, hours: int) -> None:
+        """Ändert die Stille-Sensoren-Grenze (h) live und prüft sofort neu."""
+        self.silent_hours = max(1, min(168, int(hours)))
+        await self._async_save_state()
+        await self.async_run_silent_sensors_check(notify=False)
+
+    async def async_set_battery_push_enabled(self, enabled: bool) -> None:
+        """Schaltet den proaktiven Batterie-Push ein oder aus."""
+        self.battery_push_enabled = bool(enabled)
+        self.setup_battery_push_schedule()
+        await self._async_save_state()
+        self.async_update_listeners()
+        if self.battery_push_enabled and self.battery_push_mode == BATTERY_PUSH_MODE_IMMEDIATE:
+            await self.async_run_battery_check(notify=False)
+
+    async def async_set_battery_push_mode(self, mode: str) -> None:
+        """Schaltet zwischen 'Gebündelt (Uhrzeit)' und 'Sofort' um."""
+        if mode not in (BATTERY_PUSH_MODE_SCHEDULED, BATTERY_PUSH_MODE_IMMEDIATE):
+            return
+        self.battery_push_mode = mode
+        self.setup_battery_push_schedule()
+        await self._async_save_state()
+        self.async_update_listeners()
+        if self.battery_push_enabled and mode == BATTERY_PUSH_MODE_IMMEDIATE:
+            await self.async_run_battery_check(notify=False)
+
+    async def async_set_battery_push_time(self, push_time: time) -> None:
+        """Speichert die feste Tageszeit für den gebündelten Batterie-Push."""
+        self.battery_push_time = time(push_time.hour, push_time.minute).strftime("%H:%M")
+        self.setup_battery_push_schedule()
+        await self._async_save_state()
+        self.async_update_listeners()
+
+    async def async_reset_battery_push_memory(self) -> None:
+        """Setzt den Anti-Spam-Speicher zurück, sodass schwache Batterien neu gemeldet werden."""
+        self.notified_low_batteries = {}
+        await self._async_save_state()
+        self.async_update_listeners()
 
     async def async_set_notifications_enabled(self, enabled: bool) -> None:
         """Aktiviert oder deaktiviert Benachrichtigungen persistent."""
@@ -455,11 +645,118 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         await self._async_save_state()
         self.async_update_listeners()
 
-    async def async_run_battery_check(self, notify: bool = False) -> dict:
-        """Führt den lokalen Batterie-Check (< Schwellwert) aus und aktualisiert den Sensor."""
+    async def _async_process_battery_push(
+        self, result: dict, is_scheduled_trigger: bool = False
+    ) -> list[dict]:
+        """Anti-Spam-Hysterese & proaktiver Push für neu unter den Schwellwert gefallene Batterien."""
+        all_levels = result.get("all_battery_levels") or {}
+        reset_threshold = self.get_battery_reset_threshold()
+        memory_changed = False
+
+        # 1. Batteriewechsel erkennen: wieder >= reset_threshold (z. B. 50 %) -> freigeben
+        for key in list(self.notified_low_batteries.keys()):
+            current_val = all_levels.get(key)
+            if current_val is not None and current_val >= reset_threshold:
+                self.notified_low_batteries.pop(key, None)
+                memory_changed = True
+
+        # 2. Noch nicht gemeldete schwache Geräte ermitteln
+        pending = [
+            dev
+            for dev in result.get("devices", [])
+            if dev.get("dedup_key")
+            and dev["dedup_key"] not in self.notified_low_batteries
+        ]
+
+        should_send = (
+            self.battery_push_enabled
+            and bool(pending)
+            and (
+                self.battery_push_mode == BATTERY_PUSH_MODE_IMMEDIATE
+                or is_scheduled_trigger
+            )
+        )
+
+        sent_devices: list[dict] = []
+        if should_send:
+            services = self._resolve_active_notify_services()
+            if services:
+                threshold = result.get("battery_threshold", self.battery_threshold)
+                if len(pending) == 1:
+                    d = pending[0]
+                    title = f"🔋 Batterie schwach (< {threshold} %)"
+                    message = f"{d['name']} hat nur noch {d['level_formatted']}."
+                else:
+                    title = f"🔋 {len(pending)} Batterien unter {threshold} %"
+                    lines = [
+                        f"• {d['name']}: {d['level_formatted']}" for d in pending[:12]
+                    ]
+                    if len(pending) > 12:
+                        lines.append(f"• +{len(pending) - 12} weitere Geräte")
+                    message = "\n".join(lines)
+
+                delivered = False
+                for svc in services:
+                    if "." in svc:
+                        domain, service = svc.split(".", 1)
+                    else:
+                        domain, service = "notify", svc
+                    payload: dict = {"title": title, "message": message}
+                    if domain == "notify" and service.startswith("mobile_app_"):
+                        payload["data"] = {
+                            "tag": "wohnsinnig_vernetzt_battery_low",
+                            "group": "wohnsinnig_vernetzt",
+                        }
+                    try:
+                        await self.hass.services.async_call(
+                            domain, service, payload, blocking=False
+                        )
+                        delivered = True
+                    except Exception as err:
+                        _LOGGER.warning(
+                            "Batterie-Push über %s.%s fehlgeschlagen: %s",
+                            domain,
+                            service,
+                            err,
+                        )
+
+                if delivered:
+                    now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+                    for d in pending:
+                        self.notified_low_batteries[d["dedup_key"]] = {
+                            "name": d["name"],
+                            "level": d["level"],
+                            "notified_at": now_str,
+                        }
+                    sent_devices = pending
+                    memory_changed = True
+                    self.hass.bus.async_fire(
+                        EVENT_BATTERY_PUSH_SENT,
+                        {
+                            "threshold": threshold,
+                            "reset_threshold": reset_threshold,
+                            "devices": pending,
+                        },
+                    )
+
+        if memory_changed:
+            await self._async_save_state()
+
+        return sent_devices
+
+    async def async_run_battery_check(
+        self, notify: bool = False, is_scheduled_trigger: bool = False
+    ) -> dict:
+        """Führt den lokalen Batterie-Check (< Schwellwert) inkl. Anti-Spam-Push aus."""
         result = run_battery_check(self.hass, battery_threshold=self.battery_threshold)
         self.battery_check_result = result
-        self.hass.bus.async_fire(EVENT_BATTERY_CHECK_COMPLETED, result)
+        await self._async_process_battery_push(
+            result, is_scheduled_trigger=is_scheduled_trigger
+        )
+        self.hass.bus.async_fire(
+            EVENT_BATTERY_CHECK_COMPLETED,
+            {k: v for k, v in result.items() if k != "all_battery_levels"},
+        )
         self.async_update_listeners()
 
         if notify:
@@ -482,6 +779,43 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "create",
                 {
                     "title": f"🔋 Batterie-Check ({result['status']})",
+                    "message": msg,
+                },
+                blocking=False,
+            )
+
+        return result
+
+    async def async_run_silent_sensors_check(self, notify: bool = False) -> dict:
+        """Führt den lokalen Stille-Sensoren-Wächter (> silent_hours h ohne Update) aus."""
+        result = run_silent_sensors_check(self.hass, silent_hours=self.silent_hours)
+        self.silent_sensors_result = result
+        self.hass.bus.async_fire(EVENT_SILENT_SENSORS_COMPLETED, result)
+        self.async_update_listeners()
+
+        if notify:
+            hours = result["silent_hours"]
+            if result["devices"]:
+                lines = [
+                    f"**Sensoren ohne Update seit > {hours} h** (Stand: {result['checked_at']}):",
+                    "",
+                ]
+                for dev in result["devices"]:
+                    lines.append(
+                        f"- **{dev['name']}:** seit {dev['duration_formatted']} "
+                        f"(zuletzt {dev['last_seen']})"
+                    )
+                msg = "\n".join(lines)
+            else:
+                msg = (
+                    f"Alle überwachten Sensoren haben sich innerhalb der letzten {hours} h "
+                    f"gemeldet (Stand: {result['checked_at']})."
+                )
+            await self.hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {
+                    "title": f"🤫 Stille Sensoren ({result['status']})",
                     "message": msg,
                 },
                 blocking=False,
@@ -1066,6 +1400,12 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         if self.hass.is_running:
             self.battery_check_result = run_battery_check(
                 self.hass, battery_threshold=self.battery_threshold
+            )
+            await self._async_process_battery_push(
+                self.battery_check_result, is_scheduled_trigger=False
+            )
+            self.silent_sensors_result = run_silent_sensors_check(
+                self.hass, silent_hours=self.silent_hours
             )
 
         await self._handle_new_episodes(data["episodes"], data)

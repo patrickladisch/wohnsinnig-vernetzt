@@ -27,6 +27,7 @@ async def async_setup_entry(
             WohnsinnigVernetztBlueprintsSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztAlertSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztBatteryCheckSensor(coordinator, entry.entry_id),
+            WohnsinnigVernetztSilentSensorsSensor(coordinator, entry.entry_id),
         ]
     )
 
@@ -269,7 +270,45 @@ class WohnsinnigVernetztBatteryCheckSensor(WohnsinnigVernetztEntity, SensorEntit
             "status": res.get("status", "OK"),
             "anzahl": res.get("low_battery_count", 0),
             "schwellwert": f"< {threshold} %",
+            "reset_schwellwert": f"≥ {self.coordinator.get_battery_reset_threshold()} %",
+            "bereits_gemeldet": len(self.coordinator.notified_low_batteries),
             "geprueft_am": res.get("checked_at", ""),
             "geraete": geraete if geraete else [f"Keine Geräte unter {threshold} %"],
+            "devices": res.get("devices", []),
+        }
+
+
+class WohnsinnigVernetztSilentSensorsSensor(WohnsinnigVernetztEntity, SensorEntity):
+    """Zeigt alle physischen Sensoren an, die stumm eingefroren sind (> X Stunden ohne Update)."""
+
+    _attr_name = "Stille Sensoren"
+    _unrecorded_attributes = frozenset({"geraete", "devices"})
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "silent_sensors")
+
+    @property
+    def native_value(self) -> str:
+        res = self.coordinator.silent_sensors_result
+        return res.get("summary_text") or res.get("status", "Ausstehend")
+
+    @property
+    def icon(self) -> str:
+        count = self.coordinator.silent_sensors_result.get("silent_count", 0)
+        return "mdi:sleep" if count > 0 else "mdi:access-point-check"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        res = self.coordinator.silent_sensors_result
+        hours = res.get("silent_hours", self.coordinator.silent_hours)
+        geraete = res.get("geraete", [])
+        return {
+            "status": res.get("status", "Alle aktiv"),
+            "anzahl": res.get("silent_count", 0),
+            "schwellwert": f"> {hours} h",
+            "geprueft_am": res.get("checked_at", ""),
+            "geraete": geraete if geraete else [f"Alle Sensoren aktiv (< {hours} h)"],
             "devices": res.get("devices", []),
         }

@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.1.1
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.2.0
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -1423,5 +1423,407 @@ if (!window.customCards.some((c) => c.type === "wohnsinnig-vernetzt-battery-card
     type: "wohnsinnig-vernetzt-battery-card",
     name: "Wohnsinnig vernetzt Batterie-Check",
     description: "Zeigt auf einen Klick live alle Geräte mit weniger als 15 % Batteriestand an.",
+  });
+}
+class WohnsinnigVernetztSilentSensorsCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = {
+      title: "Stille Sensoren",
+      open_default: false,
+    };
+    this._open = false;
+    this._busy = false;
+    this._liveData = null;
+    this._lastKey = null;
+  }
+
+  static getStubConfig() {
+    return {
+      title: "Stille Sensoren",
+      open_default: false,
+    };
+  }
+
+  connectedCallback() {
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    this._render();
+  }
+
+  setConfig(config) {
+    this._config = {
+      title: "Stille Sensoren",
+      open_default: false,
+      ...(config || {}),
+    };
+    this._open = Boolean(this._config.open_default);
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    this._render();
+  }
+
+  _findSilentSensor(hass) {
+    if (!hass || !hass.states) return null;
+    if (hass.states["sensor.wohnsinnig_vernetzt_stille_sensoren"]) {
+      return hass.states["sensor.wohnsinnig_vernetzt_stille_sensoren"];
+    }
+    return Object.values(hass.states).find(
+      (s) =>
+        s.entity_id.startsWith("sensor.wohnsinnig_vernetzt") &&
+        s.attributes &&
+        typeof s.attributes.schwellwert === "string" &&
+        s.attributes.schwellwert.startsWith(">") &&
+        "devices" in s.attributes
+    );
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    const sensor = this._findSilentSensor(hass);
+    const key = sensor
+      ? `${sensor.state}|${sensor.attributes.geprueft_am || ""}|${sensor.attributes.anzahl ?? ""}`
+      : "none";
+    if (key !== this._lastKey) {
+      this._lastKey = key;
+      this._liveData = null;
+      this._render();
+    }
+  }
+
+  getCardSize() {
+    return this._open ? 5 : 2;
+  }
+
+  _openMoreInfo(entityId) {
+    if (!entityId) return;
+    this.dispatchEvent(
+      new CustomEvent("hass-more-info", {
+        bubbles: true,
+        composed: true,
+        detail: { entityId },
+      })
+    );
+  }
+
+  async _fetchLiveCheck() {
+    if (!this._hass || this._busy) return;
+    this._busy = true;
+    this._render();
+    try {
+      const data = await this._hass.callApi("GET", "wohnsinnig_vernetzt/silent_sensors");
+      if (data && Array.isArray(data.devices)) {
+        this._liveData = data;
+      }
+    } catch (_) {
+      // Fallback auf Sensor-Attribute
+    } finally {
+      this._busy = false;
+      this._render();
+    }
+  }
+
+  _toggleOpen() {
+    this._open = !this._open;
+    this._render();
+    if (this._open) {
+      this._fetchLiveCheck();
+    }
+  }
+
+  _render() {
+    if (!this.shadowRoot || this.shadowRoot.innerHTML === "") return;
+    const sensor = this._findSilentSensor(this._hass);
+    const titleEl = this.shadowRoot.getElementById("ss-title");
+    const subEl = this.shadowRoot.getElementById("ss-sub");
+    const badgeEl = this.shadowRoot.getElementById("ss-badge");
+    const chevronEl = this.shadowRoot.getElementById("ss-chevron");
+    const listWrap = this.shadowRoot.getElementById("ss-list-wrap");
+    const listEl = this.shadowRoot.getElementById("ss-list");
+    const refreshBtn = this.shadowRoot.getElementById("ss-refresh");
+
+    if (titleEl) titleEl.textContent = this._config.title || "Stille Sensoren";
+    if (refreshBtn) {
+      refreshBtn.disabled = this._busy;
+      refreshBtn.textContent = this._busy ? "…" : "↻";
+    }
+
+    const attrs = sensor?.attributes || {};
+    const devices = this._liveData
+      ? this._liveData.devices
+      : Array.isArray(attrs.devices)
+      ? attrs.devices
+      : [];
+    const count = this._liveData
+      ? this._liveData.silent_count
+      : Number.isFinite(attrs.anzahl)
+      ? attrs.anzahl
+      : devices.length;
+    const threshold = this._liveData
+      ? `> ${this._liveData.silent_hours} h`
+      : attrs.schwellwert || "> 24 h";
+    const checkedAt = this._liveData
+      ? this._liveData.checked_at
+      : attrs.geprueft_am || "";
+    const badgeText = this._liveData
+      ? this._liveData.status
+      : attrs.status || (count === 0 ? "Alle aktiv" : `${count} ${count === 1 ? "Sensor" : "Sensoren"} ${threshold}`);
+
+    if (subEl) {
+      subEl.textContent = checkedAt
+        ? `Grenze ${threshold} • Stand: ${checkedAt}`
+        : `1 Klick zeigt alle stillen Sensoren ${threshold}`;
+    }
+
+    if (badgeEl) {
+      badgeEl.textContent = badgeText;
+      badgeEl.className = `ss-badge ${count > 0 ? "warn" : "ok"}`;
+    }
+
+    if (chevronEl) {
+      chevronEl.textContent = this._open ? "▲" : "▼";
+    }
+
+    if (listWrap) {
+      listWrap.style.display = this._open ? "block" : "none";
+    }
+
+    if (!listEl) return;
+    listEl.innerHTML = "";
+
+    if (!devices.length) {
+      const okEl = document.createElement("div");
+      okEl.className = "ss-empty";
+      okEl.textContent = `Alle überwachten Sensoren melden sich regelmäßig (keine Sensoren ${threshold} still).`;
+      listEl.appendChild(okEl);
+      return;
+    }
+
+    devices.forEach((dev) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "ss-row";
+      row.addEventListener("click", () => this._openMoreInfo(dev.entity_id));
+
+      const left = document.createElement("div");
+      left.className = "ss-row-left";
+
+      const name = document.createElement("div");
+      name.className = "ss-row-name";
+      name.textContent = dev.name || dev.entity_id;
+
+      const meta = document.createElement("div");
+      meta.className = "ss-row-meta";
+      meta.textContent = dev.last_seen
+        ? `Zuletzt gesehen: ${dev.last_seen}`
+        : dev.entity_id;
+
+      left.appendChild(name);
+      left.appendChild(meta);
+
+      const durEl = document.createElement("div");
+      durEl.className = "ss-dur";
+      durEl.textContent = dev.duration_formatted || `${Math.round(dev.hours_silent || 0)} h`;
+
+      row.appendChild(left);
+      row.appendChild(durEl);
+      listEl.appendChild(row);
+    });
+  }
+
+  _renderShell() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        ha-card {
+          padding: 12px 14px;
+          color: var(--primary-text-color);
+        }
+        .ss-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          cursor: pointer;
+          user-select: none;
+        }
+        .ss-left {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+          flex: 1;
+        }
+        .ss-icon {
+          width: 36px;
+          height: 36px;
+          border-radius: 10px;
+          background: var(--secondary-background-color);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 18px;
+          flex-shrink: 0;
+        }
+        .ss-titles {
+          min-width: 0;
+          flex: 1;
+        }
+        .ss-title {
+          font-size: 14px;
+          font-weight: 600;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .ss-sub {
+          font-size: 11px;
+          color: var(--secondary-text-color);
+          margin-top: 2px;
+        }
+        .ss-right {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-shrink: 0;
+        }
+        .ss-badge {
+          font-size: 11px;
+          font-weight: 600;
+          padding: 3px 8px;
+          border-radius: 999px;
+        }
+        .ss-badge.ok {
+          color: var(--success-color, #4caf50);
+          background: rgba(76, 175, 80, 0.14);
+        }
+        .ss-badge.warn {
+          color: var(--warning-color, #ff9800);
+          background: rgba(255, 152, 0, 0.16);
+        }
+        .ss-refresh {
+          background: none;
+          border: none;
+          color: var(--secondary-text-color);
+          cursor: pointer;
+          font-size: 15px;
+          padding: 4px 6px;
+          border-radius: 6px;
+        }
+        .ss-refresh:hover {
+          background: var(--secondary-background-color);
+          color: var(--primary-text-color);
+        }
+        .ss-chevron {
+          font-size: 10px;
+          color: var(--secondary-text-color);
+        }
+        .ss-list-wrap {
+          margin-top: 10px;
+          padding-top: 8px;
+          border-top: 1px solid var(--divider-color);
+          display: none;
+        }
+        .ss-list {
+          max-height: 260px;
+          overflow-y: auto;
+        }
+        .ss-empty {
+          font-size: 12px;
+          color: var(--secondary-text-color);
+          text-align: center;
+          padding: 8px 4px;
+        }
+        .ss-row {
+          width: 100%;
+          background: none;
+          border: none;
+          color: var(--primary-text-color);
+          cursor: pointer;
+          font-family: inherit;
+          text-align: left;
+          padding: 7px 6px;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          border-bottom: 1px solid var(--divider-color);
+        }
+        .ss-row:last-child {
+          border-bottom: none;
+        }
+        .ss-row:hover {
+          background: var(--secondary-background-color);
+        }
+        .ss-row-left {
+          min-width: 0;
+          flex: 1;
+        }
+        .ss-row-name {
+          font-size: 13px;
+          font-weight: 500;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .ss-row-meta {
+          font-size: 11px;
+          color: var(--secondary-text-color);
+          margin-top: 2px;
+        }
+        .ss-dur {
+          font-size: 12px;
+          font-weight: 700;
+          color: var(--warning-color, #ff9800);
+          font-variant-numeric: tabular-nums;
+          flex-shrink: 0;
+        }
+      </style>
+      <ha-card>
+        <div id="ss-header" class="ss-header">
+          <div class="ss-left">
+            <div class="ss-icon">🤫</div>
+            <div class="ss-titles">
+              <div id="ss-title" class="ss-title">Stille Sensoren</div>
+              <div id="ss-sub" class="ss-sub"></div>
+            </div>
+          </div>
+          <div class="ss-right">
+            <span id="ss-badge" class="ss-badge ok">Alle aktiv</span>
+            <button id="ss-refresh" class="ss-refresh" type="button" title="Jetzt prüfen">↻</button>
+            <span id="ss-chevron" class="ss-chevron">▼</span>
+          </div>
+        </div>
+        <div id="ss-list-wrap" class="ss-list-wrap">
+          <div id="ss-list" class="ss-list"></div>
+        </div>
+      </ha-card>
+    `;
+
+    this.shadowRoot.getElementById("ss-header").addEventListener("click", () => {
+      this._toggleOpen();
+    });
+    this.shadowRoot.getElementById("ss-refresh").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      this._open = true;
+      this._fetchLiveCheck();
+    });
+  }
+}
+
+if (!customElements.get("wohnsinnig-vernetzt-silent-sensors-card")) {
+  customElements.define("wohnsinnig-vernetzt-silent-sensors-card", WohnsinnigVernetztSilentSensorsCard);
+}
+if (!window.customCards.some((c) => c.type === "wohnsinnig-vernetzt-silent-sensors-card")) {
+  window.customCards.push({
+    type: "wohnsinnig-vernetzt-silent-sensors-card",
+    name: "Wohnsinnig vernetzt Stille Sensoren",
+    description: "Erkennt stumm eingefrorene Sensoren (Zigbee-Freeze) auf einen Klick.",
   });
 }

@@ -77,7 +77,7 @@ def run_battery_check(
     hass: HomeAssistant, battery_threshold: int = 15
 ) -> dict:
     """Prüft alle lokalen Batterie-Sensoren und meldet ausschließlich Geräte unter dem Schwellwert."""
-    candidates: dict[str, dict] = {}
+    all_candidates: dict[str, dict] = {}
 
     for state in hass.states.async_all():
         entity_id = state.entity_id
@@ -99,8 +99,7 @@ def run_battery_check(
         elif "battery_level" in attrs:
             val = _parse_float(attrs.get("battery_level"))
 
-        # Strikt unter dem Schwellwert (z. B. < 15 %, also 0 % bis 14,9 %)
-        if val is None or not (0 <= val < battery_threshold):
+        if val is None or not (0 <= val <= 100):
             continue
 
         friendly = str(attrs.get("friendly_name") or entity_id).strip()
@@ -108,9 +107,10 @@ def run_battery_check(
         dedup_key = f"dev:{device_id}" if device_id else f"ent:{entity_id}"
         rounded = int(round(val))
 
-        existing = candidates.get(dedup_key)
+        existing = all_candidates.get(dedup_key)
         if existing is None or val < existing["raw_level"]:
-            candidates[dedup_key] = {
+            all_candidates[dedup_key] = {
+                "dedup_key": dedup_key,
                 "name": display_name,
                 "entity_id": entity_id,
                 "level": rounded,
@@ -118,8 +118,18 @@ def run_battery_check(
                 "level_formatted": f"{rounded} %",
             }
 
+    # Alle aktuellen Stände für die Anti-Spam-Hysterese (Batteriewechsel-Erkennung)
+    all_battery_levels: dict[str, float] = {
+        key: item["raw_level"] for key, item in all_candidates.items()
+    }
+
+    # Strikt unter dem Schwellwert (z. B. < 15 %, also 0 % bis 14,9 %)
     low_batteries = sorted(
-        candidates.values(),
+        (
+            item
+            for item in all_candidates.values()
+            if item["raw_level"] < battery_threshold
+        ),
         key=lambda item: (item["raw_level"], item["name"].lower()),
     )
 
@@ -133,6 +143,7 @@ def run_battery_check(
 
     devices_clean = [
         {
+            "dedup_key": item["dedup_key"],
             "name": item["name"],
             "level": item["level"],
             "level_formatted": item["level_formatted"],
@@ -153,4 +164,5 @@ def run_battery_check(
         "checked_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
         "geraete": geraete_list,
         "devices": devices_clean,
+        "all_battery_levels": all_battery_levels,
     }
