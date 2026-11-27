@@ -34,6 +34,14 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_SILENT_HOURS,
     CONF_SPOTIFY_SHOW_URL,
+    CONF_WAKEUP_AUTO_PAUSE,
+    CONF_WAKEUP_DAYS,
+    CONF_WAKEUP_DURATION,
+    CONF_WAKEUP_ENTITIES,
+    CONF_WAKEUP_MODE,
+    CONF_WAKEUP_PAUSE_AUTOMATIONS,
+    CONF_WAKEUP_SUNRISE_COLOR,
+    CONF_WAKEUP_TIME,
     DEFAULT_ALERTS_URL,
     DEFAULT_BATTERY_PUSH_ENABLED,
     DEFAULT_BATTERY_PUSH_MODE,
@@ -48,6 +56,14 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SILENT_HOURS,
     DEFAULT_SPOTIFY_SHOW_URL,
+    DEFAULT_WAKEUP_AUTO_PAUSE,
+    DEFAULT_WAKEUP_DAYS,
+    DEFAULT_WAKEUP_DURATION,
+    DEFAULT_WAKEUP_MODE,
+    DEFAULT_WAKEUP_SUNRISE_COLOR,
+    DEFAULT_WAKEUP_TIME,
+    WAKEUP_DAYS_LABELS,
+    WAKEUP_MODE_LABELS,
     DOMAIN,
     NOTIFY_NONE,
 )
@@ -56,6 +72,11 @@ from .notify_helpers import get_mobile_app_services, get_notify_choices
 from .presence_simulation import (
     normalize_automation_entities,
     normalize_presence_entities,
+)
+from .wakeup_light import (
+    normalize_wakeup_automations,
+    normalize_wakeup_lights,
+    parse_wakeup_time,
 )
 
 
@@ -255,6 +276,89 @@ def _build_presence_schema(defaults: dict) -> vol.Schema:
     )
 
 
+def _build_wakeup_schema(defaults: dict) -> vol.Schema:
+    current_lights = normalize_wakeup_lights(defaults.get(CONF_WAKEUP_ENTITIES))
+    current_autos = normalize_wakeup_automations(
+        defaults.get(CONF_WAKEUP_PAUSE_AUTOMATIONS)
+    )
+    mode_choices = [
+        selector.SelectOptionDict(value=k, label=v)
+        for k, v in WAKEUP_MODE_LABELS.items()
+    ]
+    days_choices = [
+        selector.SelectOptionDict(value=k, label=v)
+        for k, v in WAKEUP_DAYS_LABELS.items()
+    ]
+    default_t = parse_wakeup_time(
+        defaults.get(CONF_WAKEUP_TIME, DEFAULT_WAKEUP_TIME)
+    ).strftime("%H:%M:%S")
+
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_WAKEUP_ENTITIES,
+                default=current_lights,
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["light"],
+                    multiple=True,
+                )
+            ),
+            vol.Required(
+                CONF_WAKEUP_MODE,
+                default=str(defaults.get(CONF_WAKEUP_MODE, DEFAULT_WAKEUP_MODE)),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=mode_choices,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_WAKEUP_TIME,
+                default=default_t,
+            ): selector.TimeSelector(),
+            vol.Required(
+                CONF_WAKEUP_DURATION,
+                default=int(
+                    defaults.get(CONF_WAKEUP_DURATION, DEFAULT_WAKEUP_DURATION)
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=120)),
+            vol.Required(
+                CONF_WAKEUP_DAYS,
+                default=str(defaults.get(CONF_WAKEUP_DAYS, DEFAULT_WAKEUP_DAYS)),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=days_choices,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_WAKEUP_AUTO_PAUSE,
+                default=bool(
+                    defaults.get(CONF_WAKEUP_AUTO_PAUSE, DEFAULT_WAKEUP_AUTO_PAUSE)
+                ),
+            ): bool,
+            vol.Optional(
+                CONF_WAKEUP_PAUSE_AUTOMATIONS,
+                default=current_autos,
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["automation"],
+                    multiple=True,
+                )
+            ),
+            vol.Required(
+                CONF_WAKEUP_SUNRISE_COLOR,
+                default=bool(
+                    defaults.get(
+                        CONF_WAKEUP_SUNRISE_COLOR, DEFAULT_WAKEUP_SUNRISE_COLOR
+                    )
+                ),
+            ): bool,
+        }
+    )
+
+
 class WohnsinnigVernetztConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Einrichtungsassistent für Wohnsinnig vernetzt."""
 
@@ -309,12 +413,41 @@ class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
             current[CONF_PRESENCE_JITTER_MINUTES] = (
                 coordinator.presence_manager.jitter_minutes
             )
+            wm = coordinator.wakeup_manager
+            current[CONF_WAKEUP_ENTITIES] = list(wm.entities)
+            current[CONF_WAKEUP_MODE] = wm.mode
+            current[CONF_WAKEUP_TIME] = wm.wakeup_time
+            current[CONF_WAKEUP_DURATION] = wm.duration_minutes
+            current[CONF_WAKEUP_DAYS] = wm.weekdays
+            current[CONF_WAKEUP_AUTO_PAUSE] = wm.auto_pause
+            current[CONF_WAKEUP_PAUSE_AUTOMATIONS] = list(wm.manual_pause_automations)
+            current[CONF_WAKEUP_SUNRISE_COLOR] = wm.sunrise_color
         return current
 
     async def async_step_init(self, user_input=None):
         return self.async_show_menu(
             step_id="init",
-            menu_options=["presence", "monitoring", "podcast"],
+            menu_options=["wakeup", "presence", "monitoring", "podcast"],
+        )
+
+    async def async_step_wakeup(self, user_input=None):
+        current = self._current_merged()
+        if user_input is not None:
+            merged = {**current, **user_input}
+            merged[CONF_WAKEUP_ENTITIES] = normalize_wakeup_lights(
+                merged.get(CONF_WAKEUP_ENTITIES)
+            )
+            merged[CONF_WAKEUP_PAUSE_AUTOMATIONS] = normalize_wakeup_automations(
+                merged.get(CONF_WAKEUP_PAUSE_AUTOMATIONS)
+            )
+            merged[CONF_WAKEUP_TIME] = parse_wakeup_time(
+                merged.get(CONF_WAKEUP_TIME)
+            ).strftime("%H:%M")
+            return self.async_create_entry(title="", data=merged)
+
+        return self.async_show_form(
+            step_id="wakeup",
+            data_schema=_build_wakeup_schema(current),
         )
 
     async def async_step_presence(self, user_input=None):

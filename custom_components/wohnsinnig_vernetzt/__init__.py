@@ -40,6 +40,14 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_SILENT_HOURS,
     CONF_SPOTIFY_SHOW_URL,
+    CONF_WAKEUP_AUTO_PAUSE,
+    CONF_WAKEUP_DAYS,
+    CONF_WAKEUP_DURATION,
+    CONF_WAKEUP_ENTITIES,
+    CONF_WAKEUP_MODE,
+    CONF_WAKEUP_PAUSE_AUTOMATIONS,
+    CONF_WAKEUP_SUNRISE_COLOR,
+    CONF_WAKEUP_TIME,
     DEFAULT_ALERTS_URL,
     DEFAULT_BATTERY_PUSH_ENABLED,
     DEFAULT_BATTERY_PUSH_MODE,
@@ -54,6 +62,12 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SILENT_HOURS,
     DEFAULT_SPOTIFY_SHOW_URL,
+    DEFAULT_WAKEUP_AUTO_PAUSE,
+    DEFAULT_WAKEUP_DAYS,
+    DEFAULT_WAKEUP_DURATION,
+    DEFAULT_WAKEUP_MODE,
+    DEFAULT_WAKEUP_SUNRISE_COLOR,
+    DEFAULT_WAKEUP_TIME,
     DEVICE_CONFIG_URL,
     DEVICE_MANUFACTURER,
     DEVICE_MODEL,
@@ -66,6 +80,8 @@ from .const import (
     SERVICE_RESET_BATTERY_PUSH_MEMORY,
     SERVICE_RUN_BATTERY_CHECK,
     SERVICE_RUN_SILENT_SENSORS_CHECK,
+    SERVICE_START_WAKEUP,
+    SERVICE_STOP_WAKEUP,
     VERSION,
 )
 from .coordinator import WohnsinnigVernetztCoordinator, normalize_notify_services
@@ -76,6 +92,11 @@ from .entity import (
 from .presence_simulation import (
     normalize_automation_entities,
     normalize_presence_entities,
+)
+from .wakeup_light import (
+    normalize_wakeup_automations,
+    normalize_wakeup_lights,
+    parse_wakeup_time,
 )
 
 PLATFORMS: list[Platform] = [
@@ -116,6 +137,12 @@ BATTERY_EXCLUSION_SCHEMA = vol.Schema(
         vol.Optional("entity_id"): str,
         vol.Optional("device_id"): str,
         vol.Optional("key"): str,
+    }
+)
+
+START_WAKEUP_SCHEMA = vol.Schema(
+    {
+        vol.Optional("duration_minutes"): vol.All(vol.Coerce(int), vol.Range(min=1, max=120)),
     }
 )
 
@@ -160,6 +187,7 @@ class WohnsinnigVernetztEpisodesView(HomeAssistantView):
                 },
                 "silent_sensors": coordinator.silent_sensors_result,
                 "presence": coordinator.presence_manager.get_status_snapshot(),
+                "wakeup": coordinator.wakeup_manager.get_status_snapshot(),
                 "spotify_show_id": coordinator.spotify_show_id,
                 "spotify_show_url": coordinator.spotify_show_url,
                 "target_entity": coordinator.target_entity,
@@ -433,6 +461,111 @@ class WohnsinnigVernetztPresenceConfigView(HomeAssistantView):
         )
 
 
+class WohnsinnigVernetztWakeUpConfigView(HomeAssistantView):
+    """Liefert und speichert die Wake-Up-Light-Konfiguration direkt aus dem Dialog."""
+
+    url = f"/api/{DOMAIN}/wakeup_config"
+    name = f"api:{DOMAIN}:wakeup_config"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        domain_data = hass.data.get(DOMAIN, {})
+        coordinator: WohnsinnigVernetztCoordinator | None = domain_data.get(
+            "coordinator"
+        )
+        if coordinator is None:
+            return self.json({"error": "Integration nicht geladen."}, status_code=503)
+
+        wm = coordinator.wakeup_manager
+        lights: list[dict] = []
+        for st in hass.states.async_all("light"):
+            if f".{DOMAIN}" in st.entity_id:
+                continue
+            attrs = st.attributes or {}
+            if attrs.get("restored") is True:
+                continue
+            lights.append(
+                {
+                    "entity_id": st.entity_id,
+                    "name": str(attrs.get("friendly_name") or st.entity_id).strip(),
+                    "state": st.state,
+                }
+            )
+        lights.sort(key=lambda item: (item["name"].lower(), item["entity_id"]))
+
+        automations: list[dict] = []
+        for st in hass.states.async_all("automation"):
+            attrs = st.attributes or {}
+            automations.append(
+                {
+                    "entity_id": st.entity_id,
+                    "name": str(attrs.get("friendly_name") or st.entity_id).strip(),
+                    "state": st.state,
+                }
+            )
+        automations.sort(key=lambda item: (item["name"].lower(), item["entity_id"]))
+
+        return self.json(
+            {
+                "enabled": wm.enabled,
+                "wakeup_entities": list(wm.entities),
+                "wakeup_mode": wm.mode,
+                "wakeup_time": wm.wakeup_time,
+                "wakeup_duration": wm.duration_minutes,
+                "wakeup_days": wm.weekdays,
+                "wakeup_auto_pause": wm.auto_pause,
+                "wakeup_pause_automations": list(wm.manual_pause_automations),
+                "wakeup_sunrise_color": wm.sunrise_color,
+                "available_lights": lights,
+                "available_automations": automations,
+            }
+        )
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if not entries:
+            return self.json({"error": "Kein Config Entry gefunden."}, status_code=404)
+        entry = entries[0]
+
+        try:
+            payload = await request.json()
+        except ValueError:
+            return self.json({"error": "Ungültiges JSON."}, status_code=400)
+
+        lights = normalize_wakeup_lights(payload.get("wakeup_entities"))
+        automations = normalize_wakeup_automations(
+            payload.get("wakeup_pause_automations")
+        )
+        mode = str(payload.get("wakeup_mode") or DEFAULT_WAKEUP_MODE)
+        if mode not in ("reach_100", "start_at"):
+            mode = DEFAULT_WAKEUP_MODE
+        w_time = parse_wakeup_time(payload.get("wakeup_time")).strftime("%H:%M")
+        try:
+            duration = max(1, min(120, int(payload.get("wakeup_duration", DEFAULT_WAKEUP_DURATION))))
+        except (TypeError, ValueError):
+            duration = DEFAULT_WAKEUP_DURATION
+        days = str(payload.get("wakeup_days") or DEFAULT_WAKEUP_DAYS)
+        if days not in ("daily", "workdays", "weekend"):
+            days = DEFAULT_WAKEUP_DAYS
+        auto_pause = bool(payload.get("wakeup_auto_pause", True))
+        sunrise_color = bool(payload.get("wakeup_sunrise_color", True))
+
+        merged = {**entry.data, **entry.options}
+        merged[CONF_WAKEUP_ENTITIES] = lights
+        merged[CONF_WAKEUP_MODE] = mode
+        merged[CONF_WAKEUP_TIME] = w_time
+        merged[CONF_WAKEUP_DURATION] = duration
+        merged[CONF_WAKEUP_DAYS] = days
+        merged[CONF_WAKEUP_AUTO_PAUSE] = auto_pause
+        merged[CONF_WAKEUP_PAUSE_AUTOMATIONS] = automations
+        merged[CONF_WAKEUP_SUNRISE_COLOR] = sunrise_color
+
+        hass.config_entries.async_update_entry(entry, options=merged)
+        return self.json({"status": "ok"})
+
+
 LEGACY_ENTITY_UNIQUE_ID_SUFFIXES = (
     "_send_feedback",
     "_feedback_message",
@@ -492,6 +625,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(WohnsinnigVernetztSilentSensorsView())
         hass.http.register_view(WohnsinnigVernetztBatteryExclusionsView())
         hass.http.register_view(WohnsinnigVernetztPresenceConfigView())
+        hass.http.register_view(WohnsinnigVernetztWakeUpConfigView())
         domain_data["frontend_registered"] = True
 
     config = {**entry.data, **entry.options}
@@ -539,6 +673,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 CONF_PRESENCE_JITTER_MINUTES, DEFAULT_PRESENCE_JITTER_MINUTES
             )
         ),
+        wakeup_entities=config.get(CONF_WAKEUP_ENTITIES),
+        wakeup_mode=str(config.get(CONF_WAKEUP_MODE, DEFAULT_WAKEUP_MODE)),
+        wakeup_time=str(config.get(CONF_WAKEUP_TIME, DEFAULT_WAKEUP_TIME)),
+        wakeup_duration=int(
+            config.get(CONF_WAKEUP_DURATION, DEFAULT_WAKEUP_DURATION)
+        ),
+        wakeup_days=str(config.get(CONF_WAKEUP_DAYS, DEFAULT_WAKEUP_DAYS)),
+        wakeup_auto_pause=bool(
+            config.get(CONF_WAKEUP_AUTO_PAUSE, DEFAULT_WAKEUP_AUTO_PAUSE)
+        ),
+        wakeup_pause_automations=config.get(CONF_WAKEUP_PAUSE_AUTOMATIONS),
+        wakeup_sunrise_color=bool(
+            config.get(CONF_WAKEUP_SUNRISE_COLOR, DEFAULT_WAKEUP_SUNRISE_COLOR)
+        ),
         default_target=config.get(CONF_DEFAULT_TARGET, BROWSER_TARGET),
     )
 
@@ -565,9 +713,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Anwesenheitssimulation & lokale Checks starten (nach HA-Start, falls noch am Booten)
     if hass.is_running:
         await coordinator.async_init_presence_simulation()
+        await coordinator.async_init_wakeup_light()
     else:
         async def _run_after_ha_started(_event: Event) -> None:
             await coordinator.async_init_presence_simulation()
+            await coordinator.async_init_wakeup_light()
             await coordinator.async_run_battery_check(notify=False)
             await coordinator.async_run_silent_sensors_check(notify=False)
 
@@ -709,6 +859,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             schema=BATTERY_EXCLUSION_SCHEMA,
         )
 
+    if not hass.services.has_service(DOMAIN, SERVICE_START_WAKEUP):
+        async def _handle_start_wakeup(call: ServiceCall) -> None:
+            coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
+                DOMAIN, {}
+            ).get("coordinator")
+            if coord is None:
+                raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
+            await coord.wakeup_manager.async_start_now(
+                duration_override=call.data.get("duration_minutes"),
+                is_scheduled=False,
+            )
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_START_WAKEUP,
+            _handle_start_wakeup,
+            schema=START_WAKEUP_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_STOP_WAKEUP):
+        async def _handle_stop_wakeup(call: ServiceCall) -> None:
+            coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
+                DOMAIN, {}
+            ).get("coordinator")
+            if coord is None:
+                raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
+            await coord.wakeup_manager.async_stop(cancelled=True)
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_STOP_WAKEUP,
+            _handle_stop_wakeup,
+        )
+
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -725,6 +909,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator: WohnsinnigVernetztCoordinator | None = domain_data.get(entry.entry_id)
     if coordinator is not None:
         await coordinator.async_shutdown_presence()
+        await coordinator.async_shutdown_wakeup_light()
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
@@ -738,6 +923,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_RESET_BATTERY_PUSH_MEMORY,
             SERVICE_EXCLUDE_BATTERY_DEVICE,
             SERVICE_INCLUDE_BATTERY_DEVICE,
+            SERVICE_START_WAKEUP,
+            SERVICE_STOP_WAKEUP,
         ):
             if hass.services.has_service(DOMAIN, svc):
                 hass.services.async_remove(DOMAIN, svc)

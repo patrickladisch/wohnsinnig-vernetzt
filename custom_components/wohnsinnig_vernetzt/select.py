@@ -17,7 +17,12 @@ from .const import (
     BROWSER_TARGET_LABEL,
     DEVICE_SECTION_BLUEPRINTS,
     DEVICE_SECTION_CHECKS,
+    DEVICE_SECTION_WAKEUP,
     DOMAIN,
+    WAKEUP_DAYS_DAILY,
+    WAKEUP_DAYS_LABELS,
+    WAKEUP_MODE_LABELS,
+    WAKEUP_MODE_REACH_100,
     NOTIFY_NONE,
 )
 from .coordinator import WohnsinnigVernetztCoordinator
@@ -82,6 +87,8 @@ async def async_setup_entry(
             WohnsinnigVernetztBatteryPushModeSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztBatteryExcludeSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztBatteryExcludedListSelect(coordinator, entry.entry_id),
+            WohnsinnigVernetztWakeUpModeSelect(coordinator, entry.entry_id),
+            WohnsinnigVernetztWakeUpDaysSelect(coordinator, entry.entry_id),
         ]
     )
 
@@ -624,3 +631,65 @@ class WohnsinnigVernetztBatteryExcludedListSelect(WohnsinnigVernetztEntity, Sele
             await self.coordinator.async_include_battery_device(action_key)
         else:
             self.async_write_ha_state()
+
+
+class WohnsinnigVernetztWakeUpModeSelect(WohnsinnigVernetztEntity, SelectEntity):
+    """Wählt, ob die Uhrzeit die Zielzeit (100 %) oder die Startzeit des Dimmens ist."""
+
+    _device_section = DEVICE_SECTION_WAKEUP
+    _attr_name = "Zeitmodus"
+    _attr_icon = "mdi:clock-start"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "wakeup_mode")
+
+    @property
+    def options(self) -> list[str]:
+        return list(WAKEUP_MODE_LABELS.values())
+
+    @property
+    def current_option(self) -> str:
+        return WAKEUP_MODE_LABELS.get(
+            self.coordinator.wakeup_manager.mode,
+            WAKEUP_MODE_LABELS[WAKEUP_MODE_REACH_100],
+        )
+
+    async def async_select_option(self, option: str) -> None:
+        for mode_key, label in WAKEUP_MODE_LABELS.items():
+            if label == option:
+                await self.coordinator.wakeup_manager.async_set_mode(mode_key)
+                return
+
+
+class WohnsinnigVernetztWakeUpDaysSelect(WohnsinnigVernetztEntity, SelectEntity):
+    """Wählt die aktiven Wochentage für das Wake-Up Light."""
+
+    _device_section = DEVICE_SECTION_WAKEUP
+    _attr_name = "Wochentage"
+    _attr_icon = "mdi:calendar-week"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "wakeup_days")
+
+    @property
+    def options(self) -> list[str]:
+        return list(WAKEUP_DAYS_LABELS.values())
+
+    @property
+    def current_option(self) -> str:
+        return WAKEUP_DAYS_LABELS.get(
+            self.coordinator.wakeup_manager.weekdays,
+            WAKEUP_DAYS_LABELS[WAKEUP_DAYS_DAILY],
+        )
+
+    async def async_select_option(self, option: str) -> None:
+        for days_key, label in WAKEUP_DAYS_LABELS.items():
+            if label == option:
+                await self.coordinator.wakeup_manager.async_set_weekdays(days_key)
+                return

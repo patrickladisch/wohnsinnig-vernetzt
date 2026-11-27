@@ -49,6 +49,12 @@ from .const import (
     DEFAULT_PRESENCE_AUTO_PAUSE_MOTION,
     DEFAULT_PRESENCE_JITTER_MINUTES,
     DEFAULT_SILENT_HOURS,
+    DEFAULT_WAKEUP_AUTO_PAUSE,
+    DEFAULT_WAKEUP_DAYS,
+    DEFAULT_WAKEUP_DURATION,
+    DEFAULT_WAKEUP_MODE,
+    DEFAULT_WAKEUP_SUNRISE_COLOR,
+    DEFAULT_WAKEUP_TIME,
     DOMAIN,
     EVENT_ALERT_RECEIVED,
     EVENT_BATTERY_CHECK_COMPLETED,
@@ -73,6 +79,12 @@ from .presence_simulation import (
     PresenceSimulationManager,
     normalize_automation_entities,
     normalize_presence_entities,
+)
+from .wakeup_light import (
+    WakeUpLightManager,
+    normalize_wakeup_automations,
+    normalize_wakeup_lights,
+    parse_wakeup_time,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -277,6 +289,14 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         presence_pause_automations: list[str] | None = None,
         presence_auto_pause_motion: bool = DEFAULT_PRESENCE_AUTO_PAUSE_MOTION,
         presence_jitter_minutes: int = DEFAULT_PRESENCE_JITTER_MINUTES,
+        wakeup_entities: list[str] | None = None,
+        wakeup_mode: str = DEFAULT_WAKEUP_MODE,
+        wakeup_time: str = DEFAULT_WAKEUP_TIME,
+        wakeup_duration: int = DEFAULT_WAKEUP_DURATION,
+        wakeup_days: str = DEFAULT_WAKEUP_DAYS,
+        wakeup_auto_pause: bool = DEFAULT_WAKEUP_AUTO_PAUSE,
+        wakeup_pause_automations: list[str] | None = None,
+        wakeup_sunrise_color: bool = DEFAULT_WAKEUP_SUNRISE_COLOR,
         default_target: str = BROWSER_TARGET,
     ) -> None:
         super().__init__(
@@ -362,6 +382,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         }
         self.presence_config_request_id: int = 0
         self.presence_config_request_user: str | None = None
+        self.wakeup_config_request_id: int = 0
+        self.wakeup_config_request_user: str | None = None
         self._persisted_presence_enabled: bool = False
         self._persisted_paused_automations: list[str] = []
         self.presence_manager = PresenceSimulationManager(
@@ -373,6 +395,31 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             ),
             auto_pause_motion=presence_auto_pause_motion,
             jitter_minutes=presence_jitter_minutes,
+        )
+
+        self._config_wakeup_mode = str(wakeup_mode or DEFAULT_WAKEUP_MODE)
+        self._config_wakeup_time = parse_wakeup_time(wakeup_time).strftime("%H:%M")
+        self._config_wakeup_duration = max(1, min(120, int(wakeup_duration or DEFAULT_WAKEUP_DURATION)))
+        self._config_wakeup_days = str(wakeup_days or DEFAULT_WAKEUP_DAYS)
+        self._config_wakeup_auto_pause = bool(wakeup_auto_pause)
+        self._config_wakeup_sunrise_color = bool(wakeup_sunrise_color)
+        self._persisted_wakeup_enabled: bool = False
+        self._persisted_wakeup_paused: list[str] = []
+
+        self.wakeup_manager = WakeUpLightManager(
+            hass=hass,
+            on_update=self.async_update_listeners,
+            on_persist=self._async_save_state,
+            entities=normalize_wakeup_lights(wakeup_entities),
+            mode=self._config_wakeup_mode,
+            wakeup_time=self._config_wakeup_time,
+            duration_minutes=self._config_wakeup_duration,
+            weekdays=self._config_wakeup_days,
+            auto_pause=self._config_wakeup_auto_pause,
+            manual_pause_automations=normalize_wakeup_automations(
+                wakeup_pause_automations
+            ),
+            sunrise_color=self._config_wakeup_sunrise_color,
         )
         self._state_loaded: bool = False
 
@@ -455,6 +502,42 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 self._persisted_paused_automations = normalize_automation_entities(
                     stored["presence_paused_automations"]
                 )
+            if isinstance(stored.get("wakeup_enabled"), bool):
+                self._persisted_wakeup_enabled = stored["wakeup_enabled"]
+            if isinstance(stored.get("wakeup_paused_automations"), list):
+                self._persisted_wakeup_paused = normalize_wakeup_automations(
+                    stored["wakeup_paused_automations"]
+                )
+            if (
+                isinstance(stored.get("wakeup_mode"), str)
+                and stored.get("last_config_wakeup_mode") == self._config_wakeup_mode
+            ):
+                self.wakeup_manager.mode = stored["wakeup_mode"]
+            if (
+                isinstance(stored.get("wakeup_time"), str)
+                and stored.get("last_config_wakeup_time") == self._config_wakeup_time
+            ):
+                self.wakeup_manager.wakeup_time = parse_wakeup_time(stored["wakeup_time"]).strftime("%H:%M")
+            if (
+                isinstance(stored.get("wakeup_duration"), int)
+                and stored.get("last_config_wakeup_duration") == self._config_wakeup_duration
+            ):
+                self.wakeup_manager.duration_minutes = max(1, min(120, stored["wakeup_duration"]))
+            if (
+                isinstance(stored.get("wakeup_days"), str)
+                and stored.get("last_config_wakeup_days") == self._config_wakeup_days
+            ):
+                self.wakeup_manager.weekdays = stored["wakeup_days"]
+            if (
+                isinstance(stored.get("wakeup_auto_pause"), bool)
+                and stored.get("last_config_wakeup_auto_pause") == self._config_wakeup_auto_pause
+            ):
+                self.wakeup_manager.auto_pause = stored["wakeup_auto_pause"]
+            if (
+                isinstance(stored.get("wakeup_sunrise_color"), bool)
+                and stored.get("last_config_wakeup_sunrise_color") == self._config_wakeup_sunrise_color
+            ):
+                self.wakeup_manager.sunrise_color = stored["wakeup_sunrise_color"]
 
         self._state_loaded = True
 
@@ -490,6 +573,22 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "presence_paused_automations": list(
                     self.presence_manager.paused_automations
                 ),
+                "wakeup_enabled": self.wakeup_manager.enabled,
+                "wakeup_paused_automations": list(
+                    self.wakeup_manager.paused_automations
+                ),
+                "wakeup_mode": self.wakeup_manager.mode,
+                "last_config_wakeup_mode": self._config_wakeup_mode,
+                "wakeup_time": self.wakeup_manager.wakeup_time,
+                "last_config_wakeup_time": self._config_wakeup_time,
+                "wakeup_duration": self.wakeup_manager.duration_minutes,
+                "last_config_wakeup_duration": self._config_wakeup_duration,
+                "wakeup_days": self.wakeup_manager.weekdays,
+                "last_config_wakeup_days": self._config_wakeup_days,
+                "wakeup_auto_pause": self.wakeup_manager.auto_pause,
+                "last_config_wakeup_auto_pause": self._config_wakeup_auto_pause,
+                "wakeup_sunrise_color": self.wakeup_manager.sunrise_color,
+                "last_config_wakeup_sunrise_color": self._config_wakeup_sunrise_color,
             }
         )
 
@@ -515,6 +614,20 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
     async def async_shutdown_presence(self) -> None:
         """Beendet Simulationstimer und speichert ausstehenden Verlauf sauber."""
         await self.presence_manager.async_shutdown()
+
+    async def async_init_wakeup_light(self) -> None:
+        """Initialisiert den Wake-Up-Light-Zeitplan und räumt ggf. pausierte Automationen auf."""
+        await self._async_load_state()
+        await self.wakeup_manager.async_initialize(
+            was_enabled=self._persisted_wakeup_enabled,
+            persisted_paused_automations=self._persisted_wakeup_paused,
+        )
+        await self._async_save_state()
+        self.async_update_listeners()
+
+    async def async_shutdown_wakeup_light(self) -> None:
+        """Beendet laufende Wake-Up-Light-Tasks & Timer sauber."""
+        await self.wakeup_manager.async_shutdown()
 
     def get_battery_reset_threshold(self) -> int:
         """Ab diesem Prozentwert gilt eine Batterie als gewechselt (Anti-Spam-Hysterese)."""

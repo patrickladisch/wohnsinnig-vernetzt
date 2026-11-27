@@ -87,3 +87,21 @@ include_battery_device:
           filter:
             - domain: sensor
               device_class: battery
+
+start_wakeup_light:
+  name: Wake-Up Light jetzt starten
+  description: Startet sofort den Sonnenaufgang (0 % → 100 %) auf den gewählten Lampen und pausiert betroffene Automationen.
+  fields:
+    duration_minutes:
+      name: Dimm-Dauer in Minuten (optional)
+      description: Überschreibt für diesen Durchlauf die eingestellte Dimm-Dauer.
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 120
+          unit_of_measurement: min
+
+stop_wakeup_light:
+  name: Wake-Up Light abbrechen
+  description: Bricht ein laufendes Wake-Up Light sofort ab und aktiviert pausierte Automationen wieder.

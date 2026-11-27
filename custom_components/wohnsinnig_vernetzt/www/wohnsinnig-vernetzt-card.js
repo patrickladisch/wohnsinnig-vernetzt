@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.5.1
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.6.0
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -3111,32 +3111,750 @@ window.__wvOpenPresenceConfigDialog = function (hass) {
   dlg.open(activeHass);
 };
 
-// Doppelte Event- & State-Bridge: funktioniert zuverlässig für ALLE Benutzer, nach Reconnects & über HA-Dialogen
-if (!window.__wvConfigBridgeV2Initialized) {
-  window.__wvConfigBridgeV2Initialized = true;
-  let subscribedConn = null;
-  let lastSeenReqId = null;
-  let lastSeenStateTs = null;
+class WohnsinnigVernetztWakeUpCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = { title: "Wake-Up Light" };
+    this._busy = false;
+    this._errorMsg = "";
+    this._lastKey = null;
+  }
 
-  const findOpenButtonState = (hass) => {
-    if (!hass || !hass.states) return null;
-    for (const st of Object.values(hass.states)) {
-      if (
-        st.entity_id.startsWith("button.") &&
-        st.attributes &&
-        st.attributes.wv_open_config === "presence"
-      ) {
-        return st;
+  static getStubConfig() {
+    return { title: "Wake-Up Light" };
+  }
+
+  connectedCallback() {
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    this._render();
+  }
+
+  setConfig(config) {
+    this._config = {
+      title: "Wake-Up Light",
+      ...(config || {}),
+    };
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    this._render();
+  }
+
+  _findEntities(hass) {
+    if (!hass || !hass.states) return { sw: null, sensor: null };
+    const sw =
+      hass.states["switch.wohnsinnig_vernetzt_wake_up_light_wake_up_light"] ||
+      Object.values(hass.states).find(
+        (s) =>
+          s.entity_id.startsWith("switch.wohnsinnig_vernetzt") &&
+          s.attributes &&
+          "zielzeit" in s.attributes &&
+          "lampen_anzahl" in s.attributes
+      );
+    const sensor =
+      hass.states["sensor.wohnsinnig_vernetzt_wake_up_light_status"] ||
+      Object.values(hass.states).find(
+        (s) =>
+          s.entity_id.startsWith("sensor.wohnsinnig_vernetzt") &&
+          s.attributes &&
+          "fortschritt_prozent" in s.attributes &&
+          "zielzeit" in s.attributes
+      );
+    return { sw, sensor };
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    const { sw, sensor } = this._findEntities(hass);
+    const key = [
+      sw ? sw.state : "",
+      sensor ? sensor.state : "",
+      sensor?.attributes?.fortschritt_prozent ?? "",
+      sensor?.attributes?.startzeit ?? "",
+      sensor?.attributes?.zielzeit ?? "",
+      sensor?.attributes?.lampen_anzahl ?? "",
+    ].join("|");
+    if (key !== this._lastKey) {
+      this._lastKey = key;
+      this._render();
+    }
+  }
+
+  getCardSize() {
+    return 3;
+  }
+
+  async _toggleMaster(ev) {
+    if (ev) ev.stopPropagation();
+    if (!this._hass || this._busy) return;
+    const { sw } = this._findEntities(this._hass);
+    if (!sw) return;
+
+    this._busy = true;
+    this._errorMsg = "";
+    this._render();
+    try {
+      await this._hass.callService("switch", sw.state === "on" ? "turn_off" : "turn_on", {
+        entity_id: sw.entity_id,
+      });
+    } catch (err) {
+      this._errorMsg = err?.message || "Bitte zuerst Lampen über ⚙️ auswählen.";
+    } finally {
+      this._busy = false;
+      this._render();
+    }
+  }
+
+  async _triggerStartStop(ev) {
+    if (ev) ev.stopPropagation();
+    if (!this._hass || this._busy) return;
+    const { sensor } = this._findEntities(this._hass);
+    const running = Boolean(sensor?.attributes?.laeuft);
+
+    this._busy = true;
+    this._errorMsg = "";
+    this._render();
+    try {
+      await this._hass.callService(
+        "wohnsinnig_vernetzt",
+        running ? "stop_wakeup_light" : "start_wakeup_light",
+        {}
+      );
+    } catch (err) {
+      this._errorMsg = err?.message || "Aktion fehlgeschlagen.";
+    } finally {
+      this._busy = false;
+      this._render();
+    }
+  }
+
+  _render() {
+    if (!this.shadowRoot || this.shadowRoot.innerHTML === "") return;
+    const { sw, sensor } = this._findEntities(this._hass);
+
+    const titleEl = this.shadowRoot.getElementById("wu-title");
+    const subEl = this.shadowRoot.getElementById("wu-sub");
+    const toggleBtn = this.shadowRoot.getElementById("wu-toggle");
+    const runBtn = this.shadowRoot.getElementById("wu-run");
+    const progWrap = this.shadowRoot.getElementById("wu-prog-wrap");
+    const progFill = this.shadowRoot.getElementById("wu-prog-fill");
+    const progLbl = this.shadowRoot.getElementById("wu-prog-lbl");
+    const pillsEl = this.shadowRoot.getElementById("wu-pills");
+    const errEl = this.shadowRoot.getElementById("wu-error");
+
+    const isOn = sw?.state === "on";
+    const attrs = sensor?.attributes || {};
+    const running = Boolean(attrs.laeuft);
+    const lampCount = attrs.lampen_anzahl ?? sw?.attributes?.lampen_anzahl ?? 0;
+    const startHhmm = attrs.startzeit || sw?.attributes?.startzeit || "06:30";
+    const endHhmm = attrs.zielzeit || sw?.attributes?.zielzeit || "07:00";
+    const durMin = attrs.dauer_minuten ?? sw?.attributes?.dauer_minuten ?? 30;
+    const pct = attrs.helligkeit_prozent ?? 0;
+    const pausedCnt = Array.isArray(attrs.pausierte_automationen)
+      ? attrs.pausierte_automationen.length
+      : 0;
+
+    if (titleEl) titleEl.textContent = this._config.title || "Wake-Up Light";
+    if (subEl) {
+      if (lampCount === 0) {
+        subEl.textContent = "Noch keine Lampen gewählt – tippe auf ⚙️";
+      } else if (running) {
+        subEl.textContent = `Sonnenaufgang läuft (${startHhmm} → ${endHhmm})`;
+      } else if (isOn) {
+        subEl.textContent = `Start ${startHhmm} → 100 % um ${endHhmm} (${durMin} Min)`;
+      } else {
+        subEl.textContent = `${lampCount} ${lampCount === 1 ? "Lampe" : "Lampen"} • ${durMin} Min Dimm-Dauer`;
       }
     }
-    return null;
-  };
 
-  const triggerIfAuthorized = (hass, reqUser) => {
+    if (toggleBtn) {
+      toggleBtn.disabled = this._busy || !sw;
+      toggleBtn.className = `wu-master ${isOn ? "on" : "off"}`;
+      toggleBtn.textContent = this._busy ? "…" : isOn ? "AKTIV" : "AUS";
+    }
+
+    if (progWrap && progFill && progLbl) {
+      progWrap.style.display = running ? "block" : "none";
+      progFill.style.width = `${Math.max(2, Math.min(100, pct))}%`;
+      progLbl.textContent = `Helligkeit: ${pct} % • noch ca. ${attrs.verbleibende_minuten ?? 0} Min`;
+    }
+
+    if (pillsEl) {
+      const modeTxt = attrs.modus === "start_at" ? `Start ${attrs.uhrzeit || startHhmm}` : `100 % um ${attrs.uhrzeit || endHhmm}`;
+      pillsEl.innerHTML = `
+        <span class="wu-pill">💡 ${lampCount} ${lampCount === 1 ? "Lampe" : "Lampen"}</span>
+        <span class="wu-pill">⏱️ ${durMin} Min (${modeTxt})</span>
+        ${running ? `<span class="wu-pill">🛡️ ${pausedCnt} Autom. pausiert</span>` : ""}
+      `;
+    }
+
+    if (runBtn) {
+      runBtn.disabled = this._busy || lampCount === 0;
+      runBtn.className = `wu-run ${running ? "stop" : ""}`;
+      runBtn.textContent = running ? "⏹ Sonnenaufgang abbrechen" : "🌅 Jetzt starten";
+    }
+
+    if (errEl) {
+      errEl.textContent = this._errorMsg;
+      errEl.style.display = this._errorMsg ? "block" : "none";
+    }
+  }
+
+  _renderShell() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        ha-card { padding: 12px 14px; color: var(--primary-text-color); }
+        .wu-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        .wu-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+        .wu-icon { width: 38px; height: 38px; border-radius: 10px; background: var(--secondary-background-color); display: flex; align-items: center; justify-content: center; font-size: 19px; flex-shrink: 0; }
+        .wu-titles { min-width: 0; flex: 1; }
+        .wu-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .wu-sub { font-size: 11px; color: var(--secondary-text-color); margin-top: 2px; }
+        .wu-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+        .wu-cfg { background: var(--secondary-background-color); border: 1px solid var(--divider-color); color: var(--primary-text-color); cursor: pointer; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+        .wu-cfg:hover { border-color: var(--primary-color); }
+        .wu-master { border: none; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 999px; }
+        .wu-master.on { background: var(--warning-color, #ff9800); color: #fff; }
+        .wu-master.off { background: var(--secondary-background-color); color: var(--secondary-text-color); border: 1px solid var(--divider-color); }
+        .wu-master:disabled, .wu-run:disabled { opacity: 0.55; cursor: default; }
+        .wu-prog-wrap { display: none; margin-top: 10px; }
+        .wu-prog-bg { width: 100%; height: 6px; border-radius: 3px; background: var(--secondary-background-color); overflow: hidden; }
+        .wu-prog-fill { height: 100%; background: linear-gradient(90deg, #ff7043, #ffca28); border-radius: 3px; transition: width 0.3s; }
+        .wu-prog-lbl { font-size: 11px; color: var(--secondary-text-color); margin-top: 4px; }
+        .wu-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+        .wu-pill { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--secondary-background-color); color: var(--secondary-text-color); }
+        .wu-run { width: 100%; margin-top: 10px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--divider-color); background: var(--secondary-background-color); color: var(--primary-text-color); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+        .wu-run:hover:not(:disabled) { border-color: var(--primary-color); color: var(--primary-color); }
+        .wu-run.stop { border-color: var(--error-color, #db4437); color: var(--error-color, #db4437); }
+        .wu-error { display: none; margin-top: 8px; padding: 7px 10px; border-radius: 8px; font-size: 12px; color: var(--error-color, #db4437); background: rgba(219, 68, 55, 0.12); }
+      </style>
+      <ha-card>
+        <div class="wu-header">
+          <div class="wu-left">
+            <div class="wu-icon">🌅</div>
+            <div class="wu-titles">
+              <div id="wu-title" class="wu-title">Wake-Up Light</div>
+              <div id="wu-sub" class="wu-sub"></div>
+            </div>
+          </div>
+          <div class="wu-actions">
+            <button id="wu-cfg" class="wu-cfg" type="button" title="Wake-Up Light konfigurieren">⚙️</button>
+            <button id="wu-toggle" class="wu-master off" type="button">AUS</button>
+          </div>
+        </div>
+        <div id="wu-prog-wrap" class="wu-prog-wrap">
+          <div class="wu-prog-bg"><div id="wu-prog-fill" class="wu-prog-fill"></div></div>
+          <div id="wu-prog-lbl" class="wu-prog-lbl"></div>
+        </div>
+        <div id="wu-pills" class="wu-pills"></div>
+        <button id="wu-run" class="wu-run" type="button">🌅 Jetzt starten</button>
+        <div id="wu-error" class="wu-error"></div>
+      </ha-card>
+    `;
+
+    this.shadowRoot.getElementById("wu-toggle").addEventListener("click", (ev) => this._toggleMaster(ev));
+    this.shadowRoot.getElementById("wu-run").addEventListener("click", (ev) => this._triggerStartStop(ev));
+    this.shadowRoot.getElementById("wu-cfg").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      if (window.__wvOpenWakeUpConfigDialog) {
+        window.__wvOpenWakeUpConfigDialog(this._hass);
+      }
+    });
+  }
+}
+
+if (!customElements.get("wohnsinnig-vernetzt-wakeup-card")) {
+  customElements.define("wohnsinnig-vernetzt-wakeup-card", WohnsinnigVernetztWakeUpCard);
+}
+if (!window.customCards.some((c) => c.type === "wohnsinnig-vernetzt-wakeup-card")) {
+  window.customCards.push({
+    type: "wohnsinnig-vernetzt-wakeup-card",
+    name: "Wohnsinnig vernetzt Wake-Up Light",
+    description: "Sonnenaufgangs-Steuerung (0 % → 100 %) mit Automations-Pause & Direkt-Konfiguration.",
+  });
+}
+
+class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._hass = null;
+    this._loading = true;
+    this._saving = false;
+    this._error = "";
+    this._savedMsg = "";
+    this._lightSearch = "";
+    this._autoSearch = "";
+    this._selectedLights = new Set();
+    this._selectedAutomations = new Set();
+    this._availableLights = [];
+    this._availableAutomations = [];
+    this._mode = "reach_100";
+    this._time = "07:00";
+    this._duration = 30;
+    this._days = "daily";
+    this._autoPause = true;
+    this._sunriseColor = true;
+  }
+
+  open(hass) {
+    this._hass = hass;
+    this._loading = true;
+    this._saving = false;
+    this._error = "";
+    this._savedMsg = "";
+    this._lightSearch = "";
+    this._autoSearch = "";
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    const nativeDlg = this.shadowRoot.getElementById("wud-native");
+    this.style.display = "block";
+    if (nativeDlg) {
+      if (typeof nativeDlg.showModal === "function") {
+        if (!nativeDlg.open) {
+          try {
+            nativeDlg.showModal();
+          } catch (_) {
+            nativeDlg.setAttribute("open", "");
+          }
+        }
+      } else {
+        nativeDlg.setAttribute("open", "");
+      }
+    }
+    this._renderBody();
+    this._loadConfig();
+  }
+
+  close() {
+    const nativeDlg = this.shadowRoot && this.shadowRoot.getElementById("wud-native");
+    if (nativeDlg) {
+      if (typeof nativeDlg.close === "function" && nativeDlg.open) {
+        try {
+          nativeDlg.close();
+        } catch (_) {
+          nativeDlg.removeAttribute("open");
+        }
+      } else {
+        nativeDlg.removeAttribute("open");
+      }
+    }
+    this.style.display = "none";
+  }
+
+  async _loadConfig() {
+    if (!this._hass) return;
+    try {
+      const data = await this._hass.callApi("GET", "wohnsinnig_vernetzt/wakeup_config");
+      this._selectedLights = new Set(data.wakeup_entities || []);
+      this._selectedAutomations = new Set(data.wakeup_pause_automations || []);
+      this._mode = data.wakeup_mode || "reach_100";
+      this._time = data.wakeup_time || "07:00";
+      this._duration = Number.isFinite(data.wakeup_duration) ? data.wakeup_duration : 30;
+      this._days = data.wakeup_days || "daily";
+      this._autoPause = data.wakeup_auto_pause !== false;
+      this._sunriseColor = data.wakeup_sunrise_color !== false;
+      this._availableLights = Array.isArray(data.available_lights) ? data.available_lights : [];
+      this._availableAutomations = Array.isArray(data.available_automations) ? data.available_automations : [];
+      this._loading = false;
+      this._error = "";
+      this._renderBody();
+    } catch (err) {
+      this._loading = false;
+      this._error = err?.body?.error || err?.message || "Konfiguration konnte nicht geladen werden.";
+      this._renderBody();
+    }
+  }
+
+  async _saveConfig() {
+    if (!this._hass || this._saving) return;
+    this._saving = true;
+    this._error = "";
+    this._savedMsg = "";
+    this._updateFooter();
+
+    try {
+      await this._hass.callApi("POST", "wohnsinnig_vernetzt/wakeup_config", {
+        wakeup_entities: Array.from(this._selectedLights),
+        wakeup_mode: this._mode,
+        wakeup_time: this._time,
+        wakeup_duration: this._duration,
+        wakeup_days: this._days,
+        wakeup_auto_pause: this._autoPause,
+        wakeup_pause_automations: Array.from(this._selectedAutomations),
+        wakeup_sunrise_color: this._sunriseColor,
+      });
+      this._saving = false;
+      this._savedMsg = "Gespeichert! Wake-Up Light übernimmt die Einstellungen…";
+      this._updateFooter();
+      setTimeout(() => this.close(), 900);
+    } catch (err) {
+      this._saving = false;
+      this._error = err?.body?.error || err?.message || "Speichern fehlgeschlagen.";
+      this._updateFooter();
+    }
+  }
+
+  _updateFooter() {
+    const statusEl = this.shadowRoot.getElementById("wud-status");
+    const saveBtn = this.shadowRoot.getElementById("wud-save");
+    if (statusEl) {
+      if (this._error) {
+        statusEl.textContent = this._error;
+        statusEl.className = "dlg-status error";
+        statusEl.style.display = "block";
+      } else if (this._savedMsg) {
+        statusEl.textContent = this._savedMsg;
+        statusEl.className = "dlg-status ok";
+        statusEl.style.display = "block";
+      } else {
+        statusEl.style.display = "none";
+      }
+    }
+    if (saveBtn) {
+      saveBtn.disabled = this._loading || this._saving;
+      saveBtn.textContent = this._saving ? "Speichert…" : "Speichern";
+    }
+  }
+
+  _renderLightList() {
+    const wrap = this.shadowRoot.getElementById("wud-light-list");
+    const cnt = this.shadowRoot.getElementById("wud-light-count");
+    if (cnt) cnt.textContent = `${this._selectedLights.size} gewählt`;
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    const q = this._lightSearch.trim().toLowerCase();
+    const sorted = [...this._availableLights].sort((a, b) => {
+      const as = this._selectedLights.has(a.entity_id) ? 0 : 1;
+      const bs = this._selectedLights.has(b.entity_id) ? 0 : 1;
+      if (as !== bs) return as - bs;
+      return a.name.localeCompare(b.name, "de");
+    });
+    const filtered = sorted.filter(
+      (i) => !q || i.name.toLowerCase().includes(q) || i.entity_id.toLowerCase().includes(q)
+    );
+    if (!filtered.length) {
+      const empty = document.createElement("div");
+      empty.className = "dlg-empty";
+      empty.textContent = "Keine passende Lampe gefunden.";
+      wrap.appendChild(empty);
+      return;
+    }
+
+    filtered.forEach((item) => {
+      const label = document.createElement("label");
+      label.className = `dlg-check-item ${this._selectedLights.has(item.entity_id) ? "selected" : ""}`;
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = this._selectedLights.has(item.entity_id);
+      cb.addEventListener("change", () => {
+        if (cb.checked) this._selectedLights.add(item.entity_id);
+        else this._selectedLights.delete(item.entity_id);
+        label.classList.toggle("selected", cb.checked);
+        const cEl = this.shadowRoot.getElementById("wud-light-count");
+        if (cEl) cEl.textContent = `${this._selectedLights.size} gewählt`;
+      });
+      const icon = document.createElement("span");
+      icon.className = "dlg-item-icon";
+      icon.textContent = "💡";
+      const txt = document.createElement("div");
+      txt.className = "dlg-item-txt";
+      const n = document.createElement("div");
+      n.className = "dlg-item-name";
+      n.textContent = item.name;
+      const sub = document.createElement("div");
+      sub.className = "dlg-item-sub";
+      sub.textContent = item.entity_id;
+      txt.appendChild(n);
+      txt.appendChild(sub);
+      label.appendChild(cb);
+      label.appendChild(icon);
+      label.appendChild(txt);
+      wrap.appendChild(label);
+    });
+  }
+
+  _renderAutoList() {
+    const wrap = this.shadowRoot.getElementById("wud-auto-list");
+    const cnt = this.shadowRoot.getElementById("wud-auto-count");
+    if (cnt) cnt.textContent = `${this._selectedAutomations.size} gewählt`;
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    const q = this._autoSearch.trim().toLowerCase();
+    const sorted = [...this._availableAutomations].sort((a, b) => {
+      const as = this._selectedAutomations.has(a.entity_id) ? 0 : 1;
+      const bs = this._selectedAutomations.has(b.entity_id) ? 0 : 1;
+      if (as !== bs) return as - bs;
+      return a.name.localeCompare(b.name, "de");
+    });
+    const filtered = sorted.filter(
+      (i) => !q || i.name.toLowerCase().includes(q) || i.entity_id.toLowerCase().includes(q)
+    );
+    if (!filtered.length) {
+      const empty = document.createElement("div");
+      empty.className = "dlg-empty";
+      empty.textContent = "Keine passende Automation gefunden.";
+      wrap.appendChild(empty);
+      return;
+    }
+
+    filtered.forEach((item) => {
+      const label = document.createElement("label");
+      label.className = `dlg-check-item ${this._selectedAutomations.has(item.entity_id) ? "selected" : ""}`;
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = this._selectedAutomations.has(item.entity_id);
+      cb.addEventListener("change", () => {
+        if (cb.checked) this._selectedAutomations.add(item.entity_id);
+        else this._selectedAutomations.delete(item.entity_id);
+        label.classList.toggle("selected", cb.checked);
+        const cEl = this.shadowRoot.getElementById("wud-auto-count");
+        if (cEl) cEl.textContent = `${this._selectedAutomations.size} gewählt`;
+      });
+      const txt = document.createElement("div");
+      txt.className = "dlg-item-txt";
+      const n = document.createElement("div");
+      n.className = "dlg-item-name";
+      n.textContent = item.name;
+      const sub = document.createElement("div");
+      sub.className = "dlg-item-sub";
+      sub.textContent = item.entity_id;
+      txt.appendChild(n);
+      txt.appendChild(sub);
+      label.appendChild(cb);
+      label.appendChild(txt);
+      wrap.appendChild(label);
+    });
+  }
+
+  _renderBody() {
+    const loadingEl = this.shadowRoot.getElementById("wud-loading");
+    const formEl = this.shadowRoot.getElementById("wud-form");
+    if (loadingEl) loadingEl.style.display = this._loading ? "block" : "none";
+    if (formEl) formEl.style.display = this._loading ? "none" : "block";
+
+    if (!this._loading) {
+      this.shadowRoot.getElementById("wud-mode").value = this._mode;
+      this.shadowRoot.getElementById("wud-time").value = this._time;
+      this.shadowRoot.getElementById("wud-dur").value = String(this._duration);
+      this.shadowRoot.getElementById("wud-days").value = this._days;
+      this.shadowRoot.getElementById("wud-autopause").checked = this._autoPause;
+      this.shadowRoot.getElementById("wud-color").checked = this._sunriseColor;
+      this._renderLightList();
+      this._renderAutoList();
+    }
+    this._updateFooter();
+  }
+
+  _renderShell() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host { display: none; font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif); }
+        dialog#wud-native { padding: 0; border: none; background: transparent; max-width: min(520px, calc(100vw - 24px)); width: 100%; max-height: 88vh; overflow: visible; color: var(--primary-text-color, #e1e1e1); }
+        dialog#wud-native::backdrop { background: rgba(0, 0, 0, 0.62); }
+        .modal { width: 100%; max-height: 88vh; background: var(--card-background-color, #1c1c1c); color: var(--primary-text-color, #e1e1e1); border-radius: 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); border: 1px solid var(--divider-color, rgba(255,255,255,0.12)); display: flex; flex-direction: column; overflow: hidden; }
+        .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--divider-color, rgba(255,255,255,0.12)); }
+        .modal-title { font-size: 16px; font-weight: 600; }
+        .close-btn { background: none; border: none; color: var(--secondary-text-color); font-size: 18px; cursor: pointer; padding: 4px 8px; border-radius: 8px; }
+        .modal-body { padding: 14px 18px; overflow-y: auto; flex: 1; }
+        .dlg-loading { text-align: center; padding: 28px 8px; color: var(--secondary-text-color); font-size: 13px; }
+        .section { margin-bottom: 14px; }
+        .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+        .section-label { font-size: 13px; font-weight: 600; }
+        .section-count { font-size: 11px; color: var(--primary-color, #03a9f4); font-weight: 600; }
+        .dlg-search { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--divider-color); background: var(--secondary-background-color); color: var(--primary-text-color); font-family: inherit; font-size: 13px; margin-bottom: 6px; }
+        .dlg-list { max-height: 155px; overflow-y: auto; border: 1px solid var(--divider-color); border-radius: 10px; padding: 4px; background: var(--secondary-background-color, rgba(255,255,255,0.03)); }
+        .dlg-check-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+        .dlg-check-item.selected { background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.14); }
+        .dlg-item-icon { font-size: 14px; flex-shrink: 0; }
+        .dlg-item-txt { min-width: 0; flex: 1; }
+        .dlg-item-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .dlg-item-sub { font-size: 11px; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .dlg-empty { font-size: 12px; color: var(--secondary-text-color); text-align: center; padding: 10px 6px; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+        .field { display: flex; flex-direction: column; gap: 4px; }
+        .field label { font-size: 11px; color: var(--secondary-text-color); font-weight: 600; }
+        .field input, .field select { padding: 7px 9px; border-radius: 8px; border: 1px solid var(--divider-color); background: var(--secondary-background-color); color: var(--primary-text-color); font-family: inherit; font-size: 13px; }
+        .inline-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--secondary-background-color); margin-bottom: 8px; }
+        .inline-row label { font-size: 13px; cursor: pointer; }
+        .dlg-status { display: none; margin: 0 18px 10px; padding: 8px 10px; border-radius: 8px; font-size: 12px; }
+        .dlg-status.ok { color: var(--success-color, #4caf50); background: rgba(76, 175, 80, 0.14); }
+        .dlg-status.error { color: var(--error-color, #db4437); background: rgba(219, 68, 55, 0.14); }
+        .modal-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--divider-color); }
+        .foot-link { font-size: 12px; color: var(--primary-color, #03a9f4); text-decoration: none; }
+        .foot-btns { display: flex; gap: 8px; }
+        .btn { border: none; border-radius: 8px; padding: 8px 14px; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+        .btn.secondary { background: var(--secondary-background-color); color: var(--primary-text-color); }
+        .btn.primary { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
+        .btn:disabled { opacity: 0.55; cursor: default; }
+      </style>
+      <dialog id="wud-native">
+        <div class="modal" role="document">
+          <div class="modal-head">
+            <div class="modal-title">🌅 Wake-Up Light konfigurieren</div>
+            <button id="wud-close" class="close-btn" type="button" aria-label="Schließen">✕</button>
+          </div>
+          <div class="modal-body">
+            <div id="wud-loading" class="dlg-loading">Lade Lampen & Automationen…</div>
+            <div id="wud-form" style="display:none;">
+              <div class="section">
+                <div class="section-head">
+                  <span class="section-label">Lampen auswählen</span>
+                  <span id="wud-light-count" class="section-count">0 gewählt</span>
+                </div>
+                <input id="wud-light-search" class="dlg-search" type="search" placeholder="Lampe suchen…" />
+                <div id="wud-light-list" class="dlg-list"></div>
+              </div>
+
+              <div class="grid-2">
+                <div class="field">
+                  <label for="wud-mode">Zeitmodus</label>
+                  <select id="wud-mode">
+                    <option value="reach_100">100% um (Weckzeit)</option>
+                    <option value="start_at">Startet um (Startzeit)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="wud-time">Uhrzeit</label>
+                  <input id="wud-time" type="time" value="07:00" />
+                </div>
+                <div class="field">
+                  <label for="wud-dur">Dimm-Dauer (Minuten)</label>
+                  <input id="wud-dur" type="number" min="1" max="120" value="30" />
+                </div>
+                <div class="field">
+                  <label for="wud-days">Wochentage</label>
+                  <select id="wud-days">
+                    <option value="daily">Jeden Tag</option>
+                    <option value="workdays">Werktags (Mo–Fr)</option>
+                    <option value="weekend">Wochenende (Sa–So)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="inline-row">
+                <label for="wud-autopause">Betroffene Lampen-Automationen während des Dimmens deaktivieren</label>
+                <input id="wud-autopause" type="checkbox" checked />
+              </div>
+              <div class="inline-row">
+                <label for="wud-color">Sonnenaufgangs-Farbtemperatur (Warmweiß → Tageslicht)</label>
+                <input id="wud-color" type="checkbox" checked />
+              </div>
+
+              <div class="section" style="margin-bottom:0;">
+                <div class="section-head">
+                  <span class="section-label">Zusätzliche Automationen pausieren (optional)</span>
+                  <span id="wud-auto-count" class="section-count">0 gewählt</span>
+                </div>
+                <input id="wud-auto-search" class="dlg-search" type="search" placeholder="Automation suchen…" />
+                <div id="wud-auto-list" class="dlg-list"></div>
+              </div>
+            </div>
+          </div>
+
+          <div id="wud-status" class="dlg-status"></div>
+
+          <div class="modal-foot">
+            <a id="wud-ext-link" class="foot-link" href="/config/integrations/integration/wohnsinnig_vernetzt">Alle Optionen ↗</a>
+            <div class="foot-btns">
+              <button id="wud-cancel" class="btn secondary" type="button">Abbrechen</button>
+              <button id="wud-save" class="btn primary" type="button">Speichern</button>
+            </div>
+          </div>
+        </div>
+      </dialog>
+    `;
+
+    const nativeDlg = this.shadowRoot.getElementById("wud-native");
+    nativeDlg.addEventListener("click", (ev) => {
+      if (ev.target === nativeDlg) this.close();
+    });
+    nativeDlg.addEventListener("close", () => {
+      this.style.display = "none";
+    });
+    this.shadowRoot.getElementById("wud-close").addEventListener("click", () => this.close());
+    this.shadowRoot.getElementById("wud-cancel").addEventListener("click", () => this.close());
+    this.shadowRoot.getElementById("wud-ext-link").addEventListener("click", () => this.close());
+    this.shadowRoot.getElementById("wud-save").addEventListener("click", () => this._saveConfig());
+
+    this.shadowRoot.getElementById("wud-light-search").addEventListener("input", (ev) => {
+      this._lightSearch = ev.target.value || "";
+      this._renderLightList();
+    });
+    this.shadowRoot.getElementById("wud-auto-search").addEventListener("input", (ev) => {
+      this._autoSearch = ev.target.value || "";
+      this._renderAutoList();
+    });
+    this.shadowRoot.getElementById("wud-mode").addEventListener("change", (ev) => {
+      this._mode = ev.target.value;
+    });
+    this.shadowRoot.getElementById("wud-time").addEventListener("change", (ev) => {
+      this._time = ev.target.value || "07:00";
+    });
+    this.shadowRoot.getElementById("wud-dur").addEventListener("change", (ev) => {
+      const val = parseInt(ev.target.value, 10);
+      this._duration = Number.isFinite(val) ? Math.max(1, Math.min(120, val)) : 30;
+    });
+    this.shadowRoot.getElementById("wud-days").addEventListener("change", (ev) => {
+      this._days = ev.target.value;
+    });
+    this.shadowRoot.getElementById("wud-autopause").addEventListener("change", (ev) => {
+      this._autoPause = Boolean(ev.target.checked);
+    });
+    this.shadowRoot.getElementById("wud-color").addEventListener("change", (ev) => {
+      this._sunriseColor = Boolean(ev.target.checked);
+    });
+  }
+}
+
+if (!customElements.get("wohnsinnig-vernetzt-wakeup-config-dialog")) {
+  customElements.define(
+    "wohnsinnig-vernetzt-wakeup-config-dialog",
+    WohnsinnigVernetztWakeUpConfigDialog
+  );
+}
+
+window.__wvLastWakeUpOpenTs = 0;
+window.__wvOpenWakeUpConfigDialog = function (hass) {
+  const now = Date.now();
+  if (now - (window.__wvLastWakeUpOpenTs || 0) < 1200) return;
+  const activeHass = hass || document.querySelector("home-assistant")?.hass;
+  if (!activeHass) return;
+  window.__wvLastWakeUpOpenTs = now;
+  let dlg = document.getElementById("wv-wakeup-config-dialog");
+  if (!dlg) {
+    dlg = document.createElement("wohnsinnig-vernetzt-wakeup-config-dialog");
+    dlg.id = "wv-wakeup-config-dialog";
+    document.body.appendChild(dlg);
+  }
+  dlg.open(activeHass);
+};
+
+// Doppelte Event- & State-Bridge für Anwesenheitssimulation UND Wake-Up Light
+if (!window.__wvConfigBridgeV3Initialized) {
+  window.__wvConfigBridgeV3Initialized = true;
+  let subscribedConn = null;
+  const seenReqBySection = {};
+  const seenStateTsBySection = {};
+
+  const openSectionDialog = (section, hass, reqUser) => {
     if (document.hidden) return;
     const curUser = hass?.user?.id;
     if (reqUser && curUser && reqUser !== curUser) return;
-    window.__wvOpenPresenceConfigDialog(hass);
+    if (section === "presence") {
+      window.__wvOpenPresenceConfigDialog(hass);
+    } else if (section === "wakeup") {
+      window.__wvOpenWakeUpConfigDialog(hass);
+    }
   };
 
   const subscribeWs = (conn) => {
@@ -3144,13 +3862,13 @@ if (!window.__wvConfigBridgeV2Initialized) {
       .subscribeEvents((ev) => {
         const currentHass = document.querySelector("home-assistant")?.hass;
         if (!currentHass) return;
+        const section = ev?.data?.section;
+        if (!section) return;
         const reqId = ev?.data?.request_id;
         if (typeof reqId === "number") {
-          lastSeenReqId = Math.max(lastSeenReqId || 0, reqId);
+          seenReqBySection[section] = Math.max(seenReqBySection[section] || 0, reqId);
         }
-        if (ev?.data?.section === "presence") {
-          triggerIfAuthorized(currentHass, ev?.data?.user_id);
-        }
+        openSectionDialog(section, currentHass, ev?.data?.user_id);
       }, "wohnsinnig_vernetzt_open_config")
       .catch(() => {
         subscribedConn = null;
@@ -3160,37 +3878,39 @@ if (!window.__wvConfigBridgeV2Initialized) {
   const checkBridge = () => {
     const ha = document.querySelector("home-assistant");
     const hass = ha && ha.hass;
-    if (!hass) return;
+    if (!hass || !hass.states) return;
 
-    // 1. WebSocket-Event-Abo (0ms Reaktionszeit)
     const conn = hass.connection;
     if (conn && conn !== subscribedConn) {
       subscribedConn = conn;
       subscribeWs(conn);
       if (typeof conn.addEventListener === "function") {
-        conn.addEventListener("ready", () => {
-          subscribeWs(conn);
-        });
+        conn.addEventListener("ready", () => subscribeWs(conn));
       }
     }
 
-    // 2. Zuverlässiger State-Watcher (funktioniert auch ohne Custom-Event-Rechte & nach Reconnects)
-    const btnState = findOpenButtonState(hass);
-    if (!btnState) return;
+    for (const st of Object.values(hass.states)) {
+      if (!st.entity_id.startsWith("button.") || !st.attributes || !st.attributes.wv_open_config) {
+        continue;
+      }
+      const section = st.attributes.wv_open_config;
+      const reqId = Number(st.attributes.open_request_id || 0);
+      const stateTs = st.state || "";
 
-    const reqId = Number(btnState.attributes.open_request_id || 0);
-    const stateTs = btnState.state || "";
+      if (!(section in seenReqBySection)) {
+        seenReqBySection[section] = reqId;
+        seenStateTsBySection[section] = stateTs;
+        continue;
+      }
 
-    if (lastSeenReqId === null) {
-      lastSeenReqId = reqId;
-      lastSeenStateTs = stateTs;
-      return;
-    }
-
-    if (reqId > lastSeenReqId || (stateTs && stateTs !== lastSeenStateTs && stateTs !== "unknown" && stateTs !== "unavailable")) {
-      lastSeenReqId = Math.max(lastSeenReqId, reqId);
-      lastSeenStateTs = stateTs;
-      triggerIfAuthorized(hass, btnState.attributes.open_request_user);
+      if (
+        reqId > seenReqBySection[section] ||
+        (stateTs && stateTs !== seenStateTsBySection[section] && stateTs !== "unknown" && stateTs !== "unavailable")
+      ) {
+        seenReqBySection[section] = Math.max(seenReqBySection[section], reqId);
+        seenStateTsBySection[section] = stateTs;
+        openSectionDialog(section, hass, st.attributes.open_request_user);
+      }
     }
   };
 

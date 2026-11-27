@@ -25,6 +25,7 @@
         "title": "Wohnsinnig vernetzt konfigurieren",
         "description": "Wähle den Bereich, den du anpassen möchtest.",
         "menu_options": {
+          "wakeup": "🌅 Wake-Up Light (Lampen, Zeit, Dauer & Automationen)",
           "presence": "🏠 Anwesenheitssimulation (Lampen, Schalter & Bewegungsmelder)",
           "monitoring": "🔋 Batterie-Check & Stille Sensoren",
           "podcast": "🎙️ Podcast, Push, Blueprints & Eilmeldungen"
@@ -62,6 +63,20 @@
           "scan_interval": "Abrufintervall (Minuten)",
           "spotify_show_url": "Spotify-Show-URL (optional)",
           "logo_url": "Logo-URL"
+        }
+      },
+      "wakeup": {
+        "title": "Wake-Up Light konfigurieren",
+        "description": "Wähle deine Lampen, lege Ziel- oder Startzeit sowie den Dimm-Zeitraum fest. Automationen, die diese Lampen betreffen, werden während des Dimmens automatisch deaktiviert.",
+        "data": {
+          "wakeup_entities": "Lampen für das Wake-Up Light",
+          "wakeup_mode": "Zeitmodus (100 % um Weckzeit oder Startzeit)",
+          "wakeup_time": "Uhrzeit",
+          "wakeup_duration": "Dimm-Dauer von 0 % auf 100 % (Minuten)",
+          "wakeup_days": "Aktive Wochentage",
+          "wakeup_auto_pause": "Betroffene Lampen-Automationen während des Dimmens deaktivieren",
+          "wakeup_pause_automations": "Zusätzliche Automationen während des Dimmens pausieren (optional)",
+          "wakeup_sunrise_color": "Sanfte Sonnenaufgangs-Farbtemperatur (Warmweiß → Tageslicht)"
         }
       }
     }

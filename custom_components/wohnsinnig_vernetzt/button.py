@@ -12,6 +12,7 @@ from .const import (
     DEVICE_SECTION_BLUEPRINTS,
     DEVICE_SECTION_CHECKS,
     DEVICE_SECTION_PRESENCE,
+    DEVICE_SECTION_WAKEUP,
     DOMAIN,
     EVENT_OPEN_CONFIG,
 )
@@ -30,6 +31,10 @@ async def async_setup_entry(
         [
             # Anwesenheitssimulation
             WohnsinnigVernetztOpenPresenceConfigButton(coordinator, entry.entry_id),
+            # Wake-Up Light
+            WohnsinnigVernetztOpenWakeUpConfigButton(coordinator, entry.entry_id),
+            WohnsinnigVernetztStartWakeUpButton(coordinator, entry.entry_id),
+            WohnsinnigVernetztStopWakeUpButton(coordinator, entry.entry_id),
             # Blueprints
             WohnsinnigVernetztImportBlueprintButton(coordinator, entry.entry_id),
             WohnsinnigVernetztImportAllBlueprintsButton(coordinator, entry.entry_id),
@@ -191,3 +196,71 @@ class WohnsinnigVernetztRefreshButton(WohnsinnigVernetztEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self.coordinator.async_request_refresh()
+
+
+class WohnsinnigVernetztOpenWakeUpConfigButton(WohnsinnigVernetztEntity, ButtonEntity):
+    """Öffnet direkt den Konfigurations-Dialog für das Wake-Up Light."""
+
+    _device_section = DEVICE_SECTION_WAKEUP
+    _attr_name = "Konfiguration öffnen"
+    _attr_icon = "mdi:tune-variant"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "wakeup_open_config")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "wv_open_config": "wakeup",
+            "open_request_id": self.coordinator.wakeup_config_request_id,
+            "open_request_user": self.coordinator.wakeup_config_request_user,
+        }
+
+    async def async_press(self) -> None:
+        user_id = self._context.user_id if self._context else None
+        self.coordinator.wakeup_config_request_id += 1
+        self.coordinator.wakeup_config_request_user = user_id
+        self.async_write_ha_state()
+        self.hass.bus.async_fire(
+            EVENT_OPEN_CONFIG,
+            {
+                "section": "wakeup",
+                "entry_id": self._entry_id,
+                "request_id": self.coordinator.wakeup_config_request_id,
+                "user_id": user_id,
+            },
+        )
+
+
+class WohnsinnigVernetztStartWakeUpButton(WohnsinnigVernetztEntity, ButtonEntity):
+    """Startet das Wake-Up Light sofort manuell (0 % → 100 % über die eingestellte Dimm-Dauer)."""
+
+    _device_section = DEVICE_SECTION_WAKEUP
+    _attr_name = "Jetzt starten"
+    _attr_icon = "mdi:play-circle-outline"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "wakeup_start_now")
+
+    async def async_press(self) -> None:
+        await self.coordinator.wakeup_manager.async_start_now(is_scheduled=False)
+
+
+class WohnsinnigVernetztStopWakeUpButton(WohnsinnigVernetztEntity, ButtonEntity):
+    """Bricht ein laufendes Wake-Up Light ab und aktiviert pausierte Automationen sofort wieder."""
+
+    _device_section = DEVICE_SECTION_WAKEUP
+    _attr_name = "Abbrechen"
+    _attr_icon = "mdi:stop-circle-outline"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "wakeup_stop_now")
+
+    async def async_press(self) -> None:
+        await self.coordinator.wakeup_manager.async_stop(cancelled=True)

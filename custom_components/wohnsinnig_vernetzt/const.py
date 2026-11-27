@@ -1,7 +1,7 @@
 """Konstanten für Wohnsinnig vernetzt."""
 
 DOMAIN = "wohnsinnig_vernetzt"
-VERSION = "2.5.1"
+VERSION = "2.6.0"
 
 DEFAULT_RSS_URL = "https://anchor.fm/s/111a8abd0/podcast/rss"
 DEFAULT_BLUEPRINTS_URL = "https://www.wohnsinnigvernetzt.de/"
@@ -93,6 +93,7 @@ DEVICE_SECTION_AUDIO = "audio"
 DEVICE_SECTION_PRESENCE = "presence"
 DEVICE_SECTION_BLUEPRINTS = "blueprints"
 DEVICE_SECTION_CHECKS = "checks"
+DEVICE_SECTION_WAKEUP = "wakeup"
 
 DEVICE_NAME = "Wohnsinnig vernetzt – Audio & Podcast"
 DEVICE_MODEL = "Podcast: Wohnsinnig vernetzt"
@@ -104,3 +105,43 @@ DEVICE_INTEGRATION_CONFIG_URL = (
 
 CARD_URL_BASE = f"/{DOMAIN}"
 CARD_FILENAME = "wohnsinnig-vernetzt-card.js"
+
+# Wake-Up Light
+WAKEUP_MODE_REACH_100 = "reach_100"
+WAKEUP_MODE_START_AT = "start_at"
+WAKEUP_MODE_LABELS = {
+    WAKEUP_MODE_REACH_100: "100% um (Weckzeit)",
+    WAKEUP_MODE_START_AT: "Startet um (Startzeit)",
+}
+
+WAKEUP_DAYS_DAILY = "daily"
+WAKEUP_DAYS_WORKDAYS = "workdays"
+WAKEUP_DAYS_WEEKEND = "weekend"
+WAKEUP_DAYS_LABELS = {
+    WAKEUP_DAYS_DAILY: "Jeden Tag",
+    WAKEUP_DAYS_WORKDAYS: "Werktags (Mo–Fr)",
+    WAKEUP_DAYS_WEEKEND: "Wochenende (Sa–So)",
+}
+
+DEFAULT_WAKEUP_MODE = WAKEUP_MODE_REACH_100
+DEFAULT_WAKEUP_TIME = "07:00"
+DEFAULT_WAKEUP_DURATION = 30
+DEFAULT_WAKEUP_DAYS = WAKEUP_DAYS_DAILY
+DEFAULT_WAKEUP_AUTO_PAUSE = True
+DEFAULT_WAKEUP_SUNRISE_COLOR = True
+
+CONF_WAKEUP_ENTITIES = "wakeup_entities"
+CONF_WAKEUP_MODE = "wakeup_mode"
+CONF_WAKEUP_TIME = "wakeup_time"
+CONF_WAKEUP_DURATION = "wakeup_duration"
+CONF_WAKEUP_DAYS = "wakeup_days"
+CONF_WAKEUP_AUTO_PAUSE = "wakeup_auto_pause"
+CONF_WAKEUP_PAUSE_AUTOMATIONS = "wakeup_pause_automations"
+CONF_WAKEUP_SUNRISE_COLOR = "wakeup_sunrise_color"
+
+EVENT_WAKEUP_STARTED = f"{DOMAIN}_wakeup_started"
+EVENT_WAKEUP_COMPLETED = f"{DOMAIN}_wakeup_completed"
+EVENT_WAKEUP_CANCELLED = f"{DOMAIN}_wakeup_cancelled"
+
+SERVICE_START_WAKEUP = "start_wakeup_light"
+SERVICE_STOP_WAKEUP = "stop_wakeup_light"

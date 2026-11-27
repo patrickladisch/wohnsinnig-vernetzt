@@ -8,7 +8,12 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DEVICE_SECTION_CHECKS, DEVICE_SECTION_PRESENCE, DOMAIN
+from .const import (
+    DEVICE_SECTION_CHECKS,
+    DEVICE_SECTION_PRESENCE,
+    DEVICE_SECTION_WAKEUP,
+    DOMAIN,
+)
 from .coordinator import WohnsinnigVernetztCoordinator
 from .entity import WohnsinnigVernetztEntity
 
@@ -26,6 +31,9 @@ async def async_setup_entry(
             WohnsinnigVernetztNotifySwitch(coordinator, entry.entry_id),
             WohnsinnigVernetztAlertsSwitch(coordinator, entry.entry_id),
             WohnsinnigVernetztBatteryPushSwitch(coordinator, entry.entry_id),
+            WohnsinnigVernetztWakeUpLightSwitch(coordinator, entry.entry_id),
+            WohnsinnigVernetztWakeUpAutoPauseSwitch(coordinator, entry.entry_id),
+            WohnsinnigVernetztWakeUpSunriseColorSwitch(coordinator, entry.entry_id),
         ]
     )
 
@@ -163,3 +171,96 @@ class WohnsinnigVernetztPresenceSimulationSwitch(WohnsinnigVernetztEntity, Switc
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_presence_simulation_enabled(False)
+
+
+class WohnsinnigVernetztWakeUpLightSwitch(WohnsinnigVernetztEntity, SwitchEntity):
+    """HAUPTSCHALTER für das automatische Wake-Up Light."""
+
+    _device_section = DEVICE_SECTION_WAKEUP
+    _attr_name = "Wake-Up Light"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "wakeup_light_enabled")
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.wakeup_manager.enabled
+
+    @property
+    def icon(self) -> str:
+        if self.coordinator.wakeup_manager.is_running:
+            return "mdi:weather-sunny"
+        return (
+            "mdi:weather-sunset-up"
+            if self.coordinator.wakeup_manager.enabled
+            else "mdi:weather-night"
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        snap = self.coordinator.wakeup_manager.get_status_snapshot()
+        return {
+            "status": snap["status"],
+            "lampen_anzahl": snap["lamps_count"],
+            "ausgewaehlte_lampen": snap["lamp_names"],
+            "startzeit": snap["start_hhmm"],
+            "zielzeit": snap["end_hhmm"],
+            "dauer_minuten": snap["duration_minutes"],
+            "pausierte_automationen": snap["paused_automation_names"],
+        }
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.wakeup_manager.async_set_enabled(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.wakeup_manager.async_set_enabled(False)
+
+
+class WohnsinnigVernetztWakeUpAutoPauseSwitch(WohnsinnigVernetztEntity, SwitchEntity):
+    """Deaktiviert betroffene Lampen-Automationen während der Dimm-Phase automatisch."""
+
+    _device_section = DEVICE_SECTION_WAKEUP
+    _attr_name = "Automationen pausieren"
+    _attr_icon = "mdi:shield-lock-outline"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "wakeup_auto_pause")
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.wakeup_manager.auto_pause
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.wakeup_manager.async_set_auto_pause(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.wakeup_manager.async_set_auto_pause(False)
+
+
+class WohnsinnigVernetztWakeUpSunriseColorSwitch(WohnsinnigVernetztEntity, SwitchEntity):
+    """Dimmt bei unterstützten Lampen zusätzlich von warmem Sonnenaufgang auf Tageslicht."""
+
+    _device_section = DEVICE_SECTION_WAKEUP
+    _attr_name = "Sonnenaufgangs-Farbe"
+    _attr_icon = "mdi:palette-outline"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "wakeup_sunrise_color")
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.wakeup_manager.sunrise_color
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.wakeup_manager.async_set_sunrise_color(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.wakeup_manager.async_set_sunrise_color(False)

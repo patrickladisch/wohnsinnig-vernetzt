@@ -25,6 +25,7 @@
         "title": "Configure Wohnsinnig vernetzt",
         "description": "Choose the section you want to configure.",
         "menu_options": {
+          "wakeup": "🌅 Wake-Up Light (Lights, Time, Duration & Automations)",
           "presence": "🏠 Presence Simulation (Lights, Switches & Motion Guard)",
           "monitoring": "🔋 Battery Check & Silent Sensors",
           "podcast": "🎙️ Podcast, Push, Blueprints & Alerts"
@@ -62,6 +63,20 @@
           "scan_interval": "Update interval (minutes)",
           "spotify_show_url": "Spotify Show URL (optional)",
           "logo_url": "Logo URL"
+        }
+      },
+      "wakeup": {
+        "title": "Configure Wake-Up Light",
+        "description": "Select lights, target or start time, and dimming duration. Automations affecting these lights are automatically disabled during dimming.",
+        "data": {
+          "wakeup_entities": "Lights for Wake-Up Light",
+          "wakeup_mode": "Time mode (reach 100% at time or start at time)",
+          "wakeup_time": "Time",
+          "wakeup_duration": "Dimming duration from 0% to 100% (minutes)",
+          "wakeup_days": "Active weekdays",
+          "wakeup_auto_pause": "Automatically disable automations affecting these lights",
+          "wakeup_pause_automations": "Additional automations to pause during dimming (optional)",
+          "wakeup_sunrise_color": "Smooth sunrise color temperature (warm white → daylight)"
         }
       }
     }

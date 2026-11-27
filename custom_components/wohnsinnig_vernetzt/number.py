@@ -8,7 +8,7 @@ from homeassistant.const import EntityCategory, PERCENTAGE, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DEVICE_SECTION_CHECKS, DOMAIN
+from .const import DEVICE_SECTION_CHECKS, DEVICE_SECTION_WAKEUP, DOMAIN
 from .coordinator import WohnsinnigVernetztCoordinator
 from .entity import WohnsinnigVernetztEntity
 
@@ -24,6 +24,7 @@ async def async_setup_entry(
         [
             WohnsinnigVernetztBatteryThresholdNumber(coordinator, entry.entry_id),
             WohnsinnigVernetztSilentHoursNumber(coordinator, entry.entry_id),
+            WohnsinnigVernetztWakeUpDurationNumber(coordinator, entry.entry_id),
         ]
     )
 
@@ -78,3 +79,29 @@ class WohnsinnigVernetztSilentHoursNumber(WohnsinnigVernetztEntity, NumberEntity
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_set_silent_hours(int(round(value)))
+
+
+class WohnsinnigVernetztWakeUpDurationNumber(WohnsinnigVernetztEntity, NumberEntity):
+    """Stellt den Dimm-Zeitraum des Wake-Up Lights (0 % auf 100 %) in Minuten ein."""
+
+    _device_section = DEVICE_SECTION_WAKEUP
+    _attr_name = "Dimm-Dauer"
+    _attr_icon = "mdi:timer-outline"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_native_min_value = 1
+    _attr_native_max_value = 120
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_mode = NumberMode.BOX
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "wakeup_duration")
+
+    @property
+    def native_value(self) -> float:
+        return float(self.coordinator.wakeup_manager.duration_minutes)
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.coordinator.wakeup_manager.async_set_duration(int(round(value)))

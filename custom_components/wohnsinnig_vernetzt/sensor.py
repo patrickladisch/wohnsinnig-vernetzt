@@ -11,6 +11,7 @@ from .const import (
     DEVICE_SECTION_BLUEPRINTS,
     DEVICE_SECTION_CHECKS,
     DEVICE_SECTION_PRESENCE,
+    DEVICE_SECTION_WAKEUP,
     DOMAIN,
 )
 from .coordinator import WohnsinnigVernetztCoordinator
@@ -34,6 +35,7 @@ async def async_setup_entry(
             WohnsinnigVernetztBatteryCheckSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztSilentSensorsSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztPresenceStatusSensor(coordinator, entry.entry_id),
+            WohnsinnigVernetztWakeUpStatusSensor(coordinator, entry.entry_id),
         ]
     )
 
@@ -372,4 +374,53 @@ class WohnsinnigVernetztPresenceStatusSensor(WohnsinnigVernetztEntity, SensorEnt
             "abgewehrte_eingriffe": snap["blocked_interferences"],
             "letzter_eingriff": snap["last_interference"],
             "letzte_schaltung": snap["last_action"],
+        }
+
+
+class WohnsinnigVernetztWakeUpStatusSensor(WohnsinnigVernetztEntity, SensorEntity):
+    """Zeigt Status, Start-/Zielzeit, Fortschritt und pausierte Automationen des Wake-Up Lights."""
+
+    _device_section = DEVICE_SECTION_WAKEUP
+    _attr_name = "Status"
+    _unrecorded_attributes = frozenset({"ausgewaehlte_lampen", "pausierte_automationen"})
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "wakeup_light_status")
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.wakeup_manager.get_status_snapshot()["status"]
+
+    @property
+    def icon(self) -> str:
+        wm = self.coordinator.wakeup_manager
+        if wm.is_running:
+            return "mdi:weather-sunny"
+        return "mdi:weather-sunset-up" if wm.enabled else "mdi:weather-night"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        snap = self.coordinator.wakeup_manager.get_status_snapshot()
+        return {
+            "aktiv": snap["enabled"],
+            "laeuft": snap["is_running"],
+            "lampen_anzahl": snap["lamps_count"],
+            "ausgewaehlte_lampen": snap["lamp_names"],
+            "entity_ids": snap["entities"],
+            "modus": snap["mode"],
+            "uhrzeit": snap["wakeup_time"],
+            "startzeit": snap["start_hhmm"],
+            "zielzeit": snap["end_hhmm"],
+            "naechster_start": snap["next_start"],
+            "dauer_minuten": snap["duration_minutes"],
+            "wochentage": snap["weekdays"],
+            "fortschritt_prozent": snap["progress_percent"],
+            "helligkeit_prozent": snap["brightness_percent"],
+            "verbleibende_minuten": snap["remaining_minutes"],
+            "automationen_pausieren": snap["auto_pause"],
+            "pausierte_automationen": snap["paused_automation_names"],
+            "sonnenaufgang_farbe": snap["sunrise_color"],
+            "letzter_durchlauf": snap["last_run"],
         }

@@ -15,6 +15,7 @@ from .const import (
     DEVICE_SECTION_BLUEPRINTS,
     DEVICE_SECTION_CHECKS,
     DEVICE_SECTION_PRESENCE,
+    DEVICE_SECTION_WAKEUP,
     DOMAIN,
 )
 from .coordinator import WohnsinnigVernetztCoordinator
@@ -38,6 +39,11 @@ SECTION_DEVICE_SPECS: dict[str, dict[str, str]] = {
     DEVICE_SECTION_CHECKS: {
         "name": "Wohnsinnig vernetzt – Batterie- & Sensor-Check",
         "model": "Batterie-Check & Stille Sensoren",
+        "config_url": DEVICE_INTEGRATION_CONFIG_URL,
+    },
+    DEVICE_SECTION_WAKEUP: {
+        "name": "Wohnsinnig vernetzt – Wake-Up Light",
+        "model": "Sonnenaufgang & Wake-Up Light",
         "config_url": DEVICE_INTEGRATION_CONFIG_URL,
     },
 }
