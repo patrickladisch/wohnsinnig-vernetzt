@@ -61,7 +61,11 @@ from .const import (
     STORAGE_VERSION,
 )
 from .notify_helpers import get_mobile_app_services
-from .battery_check import run_battery_check
+from .battery_check import (
+    normalize_battery_exclusions,
+    resolve_exclusion_key,
+    run_battery_check,
+)
 from .silent_sensors import run_silent_sensors_check
 
 _LOGGER = logging.getLogger(__name__)
@@ -257,6 +261,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         blueprints_url: str = DEFAULT_BLUEPRINTS_URL,
         alerts_url: str = DEFAULT_ALERTS_URL,
         battery_threshold: int = DEFAULT_BATTERY_THRESHOLD,
+        battery_excluded_devices: list[str] | None = None,
         silent_hours: int = DEFAULT_SILENT_HOURS,
         battery_push_enabled: bool = DEFAULT_BATTERY_PUSH_ENABLED,
         battery_push_mode: str = DEFAULT_BATTERY_PUSH_MODE,
@@ -278,6 +283,9 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
 
         self._config_battery_threshold = max(5, min(50, int(battery_threshold or DEFAULT_BATTERY_THRESHOLD)))
         self.battery_threshold = self._config_battery_threshold
+
+        self._config_battery_excluded = normalize_battery_exclusions(battery_excluded_devices)
+        self.battery_excluded_devices: list[str] = list(self._config_battery_excluded)
 
         self._config_silent_hours = max(1, min(168, int(silent_hours or DEFAULT_SILENT_HOURS)))
         self.silent_hours = self._config_silent_hours
@@ -327,6 +335,9 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             "checked_at": "",
             "geraete": [],
             "devices": [],
+            "excluded_count": 0,
+            "excluded_names": [],
+            "excluded_devices": [],
             "all_battery_levels": {},
         }
         self.silent_sensors_result: dict = {
@@ -381,6 +392,14 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 self.battery_threshold = max(5, min(50, stored["battery_threshold"]))
 
             if (
+                isinstance(stored.get("battery_excluded_devices"), list)
+                and stored.get("last_config_battery_excluded") == self._config_battery_excluded
+            ):
+                self.battery_excluded_devices = normalize_battery_exclusions(
+                    stored["battery_excluded_devices"]
+                )
+
+            if (
                 isinstance(stored.get("silent_hours"), int)
                 and stored.get("last_config_silent_hours") == self._config_silent_hours
             ):
@@ -425,6 +444,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "last_config_notify_services": list(self._config_notify_services),
                 "battery_threshold": self.battery_threshold,
                 "last_config_battery_threshold": self._config_battery_threshold,
+                "battery_excluded_devices": list(self.battery_excluded_devices),
+                "last_config_battery_excluded": list(self._config_battery_excluded),
                 "silent_hours": self.silent_hours,
                 "last_config_silent_hours": self._config_silent_hours,
                 "battery_push_enabled": self.battery_push_enabled,
@@ -515,6 +536,40 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.notified_low_batteries = {}
         await self._async_save_state()
         self.async_update_listeners()
+
+    async def async_exclude_battery_device(self, identifier: str) -> dict:
+        """Schließt ein Gerät explizit vom Batterie-Check (und Batterie-Push) aus."""
+        key = resolve_exclusion_key(self.hass, identifier)
+        if not key:
+            raise HomeAssistantError("Bitte ein gültiges Gerät oder eine Entität angeben.")
+
+        if key not in self.battery_excluded_devices:
+            self.battery_excluded_devices.append(key)
+
+        # Eventuell gespeicherten Push-Eintrag direkt mit entfernen
+        self.notified_low_batteries.pop(key, None)
+        await self._async_save_state()
+        return await self.async_run_battery_check(notify=False)
+
+    async def async_include_battery_device(self, identifier: str) -> dict:
+        """Nimmt ein zuvor ausgeschlossenes Gerät wieder in den Batterie-Check auf."""
+        raw = (identifier or "").strip()
+        resolved = resolve_exclusion_key(self.hass, raw)
+        targets = {t for t in (raw, resolved) if t}
+        if raw.startswith(("dev:", "ent:")):
+            targets.add(raw[4:])
+
+        self.battery_excluded_devices = [
+            item for item in self.battery_excluded_devices if item not in targets
+        ]
+        await self._async_save_state()
+        return await self.async_run_battery_check(notify=False)
+
+    async def async_clear_battery_exclusions(self) -> dict:
+        """Entfernt alle Ausschlüsse aus dem Batterie-Check."""
+        self.battery_excluded_devices = []
+        await self._async_save_state()
+        return await self.async_run_battery_check(notify=False)
 
     async def async_set_notifications_enabled(self, enabled: bool) -> None:
         """Aktiviert oder deaktiviert Benachrichtigungen persistent."""
@@ -748,7 +803,11 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self, notify: bool = False, is_scheduled_trigger: bool = False
     ) -> dict:
         """Führt den lokalen Batterie-Check (< Schwellwert) inkl. Anti-Spam-Push aus."""
-        result = run_battery_check(self.hass, battery_threshold=self.battery_threshold)
+        result = run_battery_check(
+            self.hass,
+            battery_threshold=self.battery_threshold,
+            excluded_keys=self.battery_excluded_devices,
+        )
         self.battery_check_result = result
         await self._async_process_battery_push(
             result, is_scheduled_trigger=is_scheduled_trigger
@@ -1399,7 +1458,9 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
 
         if self.hass.is_running:
             self.battery_check_result = run_battery_check(
-                self.hass, battery_threshold=self.battery_threshold
+                self.hass,
+                battery_threshold=self.battery_threshold,
+                excluded_keys=self.battery_excluded_devices,
             )
             await self._async_process_battery_push(
                 self.battery_check_result, is_scheduled_trigger=False

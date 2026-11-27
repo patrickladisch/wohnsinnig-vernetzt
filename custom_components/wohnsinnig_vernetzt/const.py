@@ -1,7 +1,7 @@
 """Konstanten für Wohnsinnig vernetzt."""
 
 DOMAIN = "wohnsinnig_vernetzt"
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 DEFAULT_RSS_URL = "https://anchor.fm/s/111a8abd0/podcast/rss"
 DEFAULT_BLUEPRINTS_URL = "https://www.wohnsinnigvernetzt.de/"
@@ -33,6 +33,7 @@ CONF_NOTIFY_SERVICE = "notify_service"  # Legacy v1.0.0 Kompatibilität
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_DEFAULT_TARGET = "default_target"
 CONF_BATTERY_THRESHOLD = "battery_threshold"
+CONF_BATTERY_EXCLUDED_DEVICES = "battery_excluded_devices"
 CONF_BATTERY_PUSH_ENABLED = "battery_push_enabled"
 CONF_BATTERY_PUSH_MODE = "battery_push_mode"
 CONF_BATTERY_PUSH_TIME = "battery_push_time"
@@ -67,6 +68,8 @@ SERVICE_MARK_EPISODE_SEEN = "mark_episode_seen"
 SERVICE_RUN_BATTERY_CHECK = "run_battery_check"
 SERVICE_RUN_SILENT_SENSORS_CHECK = "run_silent_sensors_check"
 SERVICE_RESET_BATTERY_PUSH_MEMORY = "reset_battery_push_memory"
+SERVICE_EXCLUDE_BATTERY_DEVICE = "exclude_battery_device"
+SERVICE_INCLUDE_BATTERY_DEVICE = "include_battery_device"
 
 BLUEPRINT_SUBDIR = "wohnsinnig_vernetzt"
 ALLOWED_BLUEPRINT_DOMAINS = ("automation", "script")

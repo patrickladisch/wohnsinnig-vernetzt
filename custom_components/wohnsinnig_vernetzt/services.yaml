@@ -47,3 +47,43 @@ run_silent_sensors_check:
 reset_battery_push_memory:
   name: Batterie-Push-Speicher zurücksetzen
   description: Setzt die Anti-Spam-Sperre zurück, sodass aktuell schwache Batterien beim nächsten Check erneut per Push gemeldet werden.
+
+exclude_battery_device:
+  name: Gerät vom Batterie-Check ausschließen
+  description: Schließt ein bestimmtes Gerät (oder eine Batterie-Entität) dauerhaft vom Batterie-Check und Batterie-Push aus.
+  fields:
+    device_id:
+      name: Gerät (optional)
+      description: Wähle das Gerät, das nicht mehr im Batterie-Check erscheinen soll.
+      required: false
+      selector:
+        device:
+    entity_id:
+      name: Batterie-Entität (optional)
+      description: Alternativ kannst du direkt die Batterie-Entität auswählen.
+      required: false
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: battery
+
+include_battery_device:
+  name: Gerät wieder in Batterie-Check aufnehmen
+  description: Entfernt ein zuvor ausgeschlossenes Gerät wieder von der Ausschlussliste.
+  fields:
+    device_id:
+      name: Gerät (optional)
+      description: Das Gerät, das wieder überwacht werden soll.
+      required: false
+      selector:
+        device:
+    entity_id:
+      name: Batterie-Entität (optional)
+      description: Alternativ die Batterie-Entität auswählen.
+      required: false
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: battery

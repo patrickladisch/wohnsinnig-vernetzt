@@ -16,7 +16,8 @@
           "battery_push_enabled": "Proaktiver Batterie-Push aktiv (ohne Spam)",
           "battery_push_mode": "Batterie-Push Modus",
           "battery_push_time": "Uhrzeit für gebündelten Batterie-Push",
-          "silent_hours": "Stille Sensoren: Meldegrenze (Stunden ohne Update)"
+          "silent_hours": "Stille Sensoren: Meldegrenze (Stunden ohne Update)",
+          "battery_excluded_devices": "Batterie-Check: Ausgeschlossene Geräte (exkludieren)"
         }
       }
     },
@@ -40,7 +41,8 @@
           "battery_push_enabled": "Proaktiver Batterie-Push aktiv (ohne Spam)",
           "battery_push_mode": "Batterie-Push Modus",
           "battery_push_time": "Uhrzeit für gebündelten Batterie-Push",
-          "silent_hours": "Stille Sensoren: Meldegrenze (Stunden ohne Update)"
+          "silent_hours": "Stille Sensoren: Meldegrenze (Stunden ohne Update)",
+          "battery_excluded_devices": "Batterie-Check: Ausgeschlossene Geräte (exkludieren)"
         }
       }
     }

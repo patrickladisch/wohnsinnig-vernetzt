@@ -16,7 +16,8 @@
           "battery_push_enabled": "Proactive battery push enabled (anti-spam)",
           "battery_push_mode": "Battery push mode",
           "battery_push_time": "Daily time for bundled battery push",
-          "silent_hours": "Silent sensors: alert threshold (hours without update)"
+          "silent_hours": "Silent sensors: alert threshold (hours without update)",
+          "battery_excluded_devices": "Battery check: Excluded devices"
         }
       }
     },
@@ -40,7 +41,8 @@
           "battery_push_enabled": "Proactive battery push enabled (anti-spam)",
           "battery_push_mode": "Battery push mode",
           "battery_push_time": "Daily time for bundled battery push",
-          "silent_hours": "Silent sensors: alert threshold (hours without update)"
+          "silent_hours": "Silent sensors: alert threshold (hours without update)",
+          "battery_excluded_devices": "Battery check: Excluded devices"
         }
       }
     }

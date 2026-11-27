@@ -14,6 +14,7 @@ from .const import (
     CONF_BATTERY_PUSH_ENABLED,
     CONF_BATTERY_PUSH_MODE,
     CONF_BATTERY_PUSH_TIME,
+    CONF_BATTERY_EXCLUDED_DEVICES,
     CONF_BATTERY_THRESHOLD,
     CONF_BLUEPRINTS_URL,
     CONF_LOGO_URL,
@@ -37,6 +38,12 @@ from .const import (
     DEFAULT_SPOTIFY_SHOW_URL,
     DOMAIN,
     NOTIFY_NONE,
+)
+from .battery_check import (
+    _resolve_excluded_display_name,
+    get_all_battery_devices,
+    normalize_battery_exclusions,
+    resolve_exclusion_key,
 )
 from .coordinator import normalize_notify_services, parse_hhmm_time
 from .notify_helpers import get_mobile_app_services, get_notify_choices
@@ -71,6 +78,30 @@ def _build_schema(
         for mode_key, label in BATTERY_PUSH_MODE_LABELS.items()
     ]
 
+    current_excluded = normalize_battery_exclusions(
+        defaults.get(CONF_BATTERY_EXCLUDED_DEVICES)
+    )
+    battery_device_choices: list[selector.SelectOptionDict] = []
+    seen_excl_values: set[str] = set()
+    for dev in get_all_battery_devices(hass):
+        key = dev["dedup_key"]
+        if key in seen_excl_values:
+            continue
+        seen_excl_values.add(key)
+        lvl = f" ({dev['level_formatted']})" if dev.get("level") is not None else ""
+        battery_device_choices.append(
+            selector.SelectOptionDict(value=key, label=f"{dev['name']}{lvl}")
+        )
+    for key in current_excluded:
+        if key not in seen_excl_values:
+            seen_excl_values.add(key)
+            battery_device_choices.append(
+                selector.SelectOptionDict(
+                    value=key,
+                    label=_resolve_excluded_display_name(hass, key),
+                )
+            )
+
     default_push_time = parse_hhmm_time(
         defaults.get(CONF_BATTERY_PUSH_TIME, DEFAULT_BATTERY_PUSH_TIME)
     ).strftime("%H:%M:%S")
@@ -97,6 +128,17 @@ def _build_schema(
                     defaults.get(CONF_BATTERY_THRESHOLD, DEFAULT_BATTERY_THRESHOLD)
                 ),
             ): vol.All(vol.Coerce(int), vol.Range(min=5, max=50)),
+            vol.Optional(
+                CONF_BATTERY_EXCLUDED_DEVICES,
+                default=current_excluded,
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=battery_device_choices,
+                    multiple=True,
+                    custom_value=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
             vol.Required(
                 CONF_BATTERY_PUSH_ENABLED,
                 default=bool(
@@ -164,6 +206,14 @@ class WohnsinnigVernetztConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             cleaned[CONF_BATTERY_PUSH_TIME] = parse_hhmm_time(
                 cleaned.get(CONF_BATTERY_PUSH_TIME)
             ).strftime("%H:%M")
+            cleaned[CONF_BATTERY_EXCLUDED_DEVICES] = normalize_battery_exclusions(
+                [
+                    resolve_exclusion_key(self.hass, item)
+                    for item in normalize_battery_exclusions(
+                        cleaned.get(CONF_BATTERY_EXCLUDED_DEVICES)
+                    )
+                ]
+            )
             return self.async_create_entry(
                 title="Wohnsinnig vernetzt",
                 data=cleaned,
@@ -189,6 +239,14 @@ class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
             cleaned[CONF_BATTERY_PUSH_TIME] = parse_hhmm_time(
                 cleaned.get(CONF_BATTERY_PUSH_TIME)
             ).strftime("%H:%M")
+            cleaned[CONF_BATTERY_EXCLUDED_DEVICES] = normalize_battery_exclusions(
+                [
+                    resolve_exclusion_key(self.hass, item)
+                    for item in normalize_battery_exclusions(
+                        cleaned.get(CONF_BATTERY_EXCLUDED_DEVICES)
+                    )
+                ]
+            )
             return self.async_create_entry(title="", data=cleaned)
 
         current = {**self.config_entry.data, **self.config_entry.options}
@@ -196,6 +254,9 @@ class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
         if coordinator is not None:
             current[CONF_NOTIFY_SERVICES] = list(coordinator.notify_services)
             current[CONF_BATTERY_THRESHOLD] = coordinator.battery_threshold
+            current[CONF_BATTERY_EXCLUDED_DEVICES] = list(
+                coordinator.battery_excluded_devices
+            )
             current[CONF_SILENT_HOURS] = coordinator.silent_hours
             current[CONF_BATTERY_PUSH_ENABLED] = coordinator.battery_push_enabled
             current[CONF_BATTERY_PUSH_MODE] = coordinator.battery_push_mode

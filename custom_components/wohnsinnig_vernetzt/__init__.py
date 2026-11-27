@@ -25,6 +25,7 @@ from .const import (
     CONF_BATTERY_PUSH_ENABLED,
     CONF_BATTERY_PUSH_MODE,
     CONF_BATTERY_PUSH_TIME,
+    CONF_BATTERY_EXCLUDED_DEVICES,
     CONF_BATTERY_THRESHOLD,
     CONF_BLUEPRINTS_URL,
     CONF_DEFAULT_TARGET,
@@ -54,6 +55,8 @@ from .const import (
     DOMAIN,
     SERVICE_IMPORT_BLUEPRINT,
     SERVICE_MARK_EPISODE_SEEN,
+    SERVICE_EXCLUDE_BATTERY_DEVICE,
+    SERVICE_INCLUDE_BATTERY_DEVICE,
     SERVICE_RESET_BATTERY_PUSH_MEMORY,
     SERVICE_RUN_BATTERY_CHECK,
     SERVICE_RUN_SILENT_SENSORS_CHECK,
@@ -91,6 +94,14 @@ RUN_BATTERY_CHECK_SCHEMA = vol.Schema(
 RUN_SILENT_SENSORS_SCHEMA = vol.Schema(
     {
         vol.Optional("notify", default=False): bool,
+    }
+)
+
+BATTERY_EXCLUSION_SCHEMA = vol.Schema(
+    {
+        vol.Optional("entity_id"): str,
+        vol.Optional("device_id"): str,
+        vol.Optional("key"): str,
     }
 )
 
@@ -258,6 +269,57 @@ class WohnsinnigVernetztSilentSensorsView(HomeAssistantView):
         return self.json(result)
 
 
+class WohnsinnigVernetztBatteryExclusionsView(HomeAssistantView):
+    """Schließt Geräte per 1-Klick-Button aus dem Batterie-Check aus oder nimmt sie wieder auf."""
+
+    url = f"/api/{DOMAIN}/battery_exclusions"
+    name = f"api:{DOMAIN}:battery_exclusions"
+    requires_auth = True
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        domain_data = hass.data.get(DOMAIN, {})
+        coordinator: WohnsinnigVernetztCoordinator | None = domain_data.get(
+            "coordinator"
+        )
+        if coordinator is None:
+            return self.json({"error": "Integration nicht geladen."}, status_code=503)
+
+        try:
+            payload = await request.json()
+        except ValueError:
+            return self.json({"error": "Ungültiges JSON."}, status_code=400)
+
+        action = str(payload.get("action", "")).strip().lower()
+        key = str(
+            payload.get("key")
+            or payload.get("entity_id")
+            or payload.get("device_id")
+            or ""
+        ).strip()
+
+        try:
+            if action == "exclude":
+                result = await coordinator.async_exclude_battery_device(key)
+            elif action == "include":
+                result = await coordinator.async_include_battery_device(key)
+            elif action == "clear":
+                result = await coordinator.async_clear_battery_exclusions()
+            else:
+                return self.json({"error": "Ungültige Aktion."}, status_code=400)
+        except HomeAssistantError as err:
+            return self.json({"error": str(err)}, status_code=400)
+
+        return self.json(
+            {
+                "status": "ok",
+                "battery_check": {
+                    k: v for k, v in result.items() if k != "all_battery_levels"
+                },
+            }
+        )
+
+
 LEGACY_ENTITY_UNIQUE_ID_SUFFIXES = (
     "_send_feedback",
     "_feedback_message",
@@ -313,6 +375,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(WohnsinnigVernetztImportBlueprintView())
         hass.http.register_view(WohnsinnigVernetztBatteryCheckView())
         hass.http.register_view(WohnsinnigVernetztSilentSensorsView())
+        hass.http.register_view(WohnsinnigVernetztBatteryExclusionsView())
         domain_data["frontend_registered"] = True
 
     config = {**entry.data, **entry.options}
@@ -337,6 +400,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         battery_threshold=int(
             config.get(CONF_BATTERY_THRESHOLD, DEFAULT_BATTERY_THRESHOLD)
         ),
+        battery_excluded_devices=config.get(CONF_BATTERY_EXCLUDED_DEVICES),
         silent_hours=int(config.get(CONF_SILENT_HOURS, DEFAULT_SILENT_HOURS)),
         battery_push_enabled=bool(
             config.get(CONF_BATTERY_PUSH_ENABLED, DEFAULT_BATTERY_PUSH_ENABLED)
@@ -463,7 +527,53 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_register(
             DOMAIN,
             SERVICE_RESET_BATTERY_PUSH_MEMORY,
+            SERVICE_EXCLUDE_BATTERY_DEVICE,
+            SERVICE_INCLUDE_BATTERY_DEVICE,
             _handle_reset_battery_memory,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_EXCLUDE_BATTERY_DEVICE):
+        async def _handle_exclude_battery_device(call: ServiceCall) -> None:
+            coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
+                DOMAIN, {}
+            ).get("coordinator")
+            if coord is None:
+                raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
+            identifier = (
+                call.data.get("key")
+                or call.data.get("device_id")
+                or call.data.get("entity_id")
+                or ""
+            )
+            await coord.async_exclude_battery_device(str(identifier))
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_EXCLUDE_BATTERY_DEVICE,
+            _handle_exclude_battery_device,
+            schema=BATTERY_EXCLUSION_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_INCLUDE_BATTERY_DEVICE):
+        async def _handle_include_battery_device(call: ServiceCall) -> None:
+            coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
+                DOMAIN, {}
+            ).get("coordinator")
+            if coord is None:
+                raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
+            identifier = (
+                call.data.get("key")
+                or call.data.get("device_id")
+                or call.data.get("entity_id")
+                or ""
+            )
+            await coord.async_include_battery_device(str(identifier))
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_INCLUDE_BATTERY_DEVICE,
+            _handle_include_battery_device,
+            schema=BATTERY_EXCLUSION_SCHEMA,
         )
 
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))

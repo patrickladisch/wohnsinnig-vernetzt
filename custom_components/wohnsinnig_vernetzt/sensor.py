@@ -240,7 +240,7 @@ class WohnsinnigVernetztBatteryCheckSensor(WohnsinnigVernetztEntity, SensorEntit
     """Zeigt alle Geräte mit weniger als 15 % Batteriestand an."""
 
     _attr_name = "Batterie-Check"
-    _unrecorded_attributes = frozenset({"geraete", "devices"})
+    _unrecorded_attributes = frozenset({"geraete", "devices", "ausgeschlossene_geraete", "excluded_devices"})
 
     def __init__(
         self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
@@ -275,6 +275,9 @@ class WohnsinnigVernetztBatteryCheckSensor(WohnsinnigVernetztEntity, SensorEntit
             "geprueft_am": res.get("checked_at", ""),
             "geraete": geraete if geraete else [f"Keine Geräte unter {threshold} %"],
             "devices": res.get("devices", []),
+            "ausgeschlossen_anzahl": res.get("excluded_count", 0),
+            "ausgeschlossene_geraete": res.get("excluded_names", []),
+            "excluded_devices": res.get("excluded_devices", []),
         }
 
 

@@ -352,6 +352,8 @@ class WohnsinnigVernetztBatteryListSelect(WohnsinnigVernetztEntity, SelectEntity
             "anzahl": res.get("low_battery_count", 0),
             "schwellwert": f"< {res.get('battery_threshold', 15)} %",
             "geprueft_am": res.get("checked_at", ""),
+            "ausgeschlossen_anzahl": res.get("excluded_count", 0),
+            "ausgeschlossene_geraete": res.get("excluded_names", []),
             "geraete": res.get("geraete", []),
         }
 

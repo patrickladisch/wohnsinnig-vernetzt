@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.2.0
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.3.0
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -1023,6 +1023,7 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
       open_default: false,
     };
     this._open = false;
+    this._showExcluded = false;
     this._busy = false;
     this._liveData = null;
     this._lastKey = null;
@@ -1076,7 +1077,7 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
     }
     const sensor = this._findBatterySensor(hass);
     const key = sensor
-      ? `${sensor.state}|${sensor.attributes.geprueft_am || ""}|${sensor.attributes.anzahl ?? ""}`
+      ? `${sensor.state}|${sensor.attributes.geprueft_am || ""}|${sensor.attributes.anzahl ?? ""}|${sensor.attributes.ausgeschlossen_anzahl ?? ""}`
       : "none";
     if (key !== this._lastKey) {
       this._lastKey = key;
@@ -1117,6 +1118,28 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
     }
   }
 
+  async _updateExclusion(action, key, ev) {
+    if (ev) ev.stopPropagation();
+    if (!this._hass || this._busy || !key) return;
+    this._busy = true;
+    this._render();
+    try {
+      const resp = await this._hass.callApi(
+        "POST",
+        "wohnsinnig_vernetzt/battery_exclusions",
+        { action, key }
+      );
+      if (resp && resp.battery_check) {
+        this._liveData = resp.battery_check;
+      }
+    } catch (_) {
+      // ignore
+    } finally {
+      this._busy = false;
+      this._render();
+    }
+  }
+
   _toggleOpen() {
     this._open = !this._open;
     this._render();
@@ -1135,6 +1158,9 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
     const listWrap = this.shadowRoot.getElementById("bc-list-wrap");
     const listEl = this.shadowRoot.getElementById("bc-list");
     const refreshBtn = this.shadowRoot.getElementById("bc-refresh");
+    const exclWrap = this.shadowRoot.getElementById("bc-excl-wrap");
+    const exclToggle = this.shadowRoot.getElementById("bc-excl-toggle");
+    const exclList = this.shadowRoot.getElementById("bc-excl-list");
 
     if (titleEl) titleEl.textContent = this._config.title || "Batterie-Check";
     if (refreshBtn) {
@@ -1147,6 +1173,11 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
       ? this._liveData.devices
       : Array.isArray(attrs.devices)
       ? attrs.devices
+      : [];
+    const excludedDevices = this._liveData
+      ? this._liveData.excluded_devices || []
+      : Array.isArray(attrs.excluded_devices)
+      ? attrs.excluded_devices
       : [];
     const count = this._liveData
       ? this._liveData.low_battery_count
@@ -1164,9 +1195,12 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
       : attrs.status || (count === 0 ? "OK" : `${count} ${count === 1 ? "Gerät" : "Geräte"} ${threshold}`);
 
     if (subEl) {
+      const exclHint = excludedDevices.length
+        ? ` • ${excludedDevices.length} ausgeschl.`
+        : "";
       subEl.textContent = checkedAt
-        ? `Schwellwert ${threshold} • Stand: ${checkedAt}`
-        : `1 Klick zeigt alle Geräte ${threshold}`;
+        ? `Grenze ${threshold} • Stand: ${checkedAt}${exclHint}`
+        : `1 Klick zeigt alle Geräte ${threshold}${exclHint}`;
     }
 
     if (badgeEl) {
@@ -1182,49 +1216,107 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
       listWrap.style.display = this._open ? "block" : "none";
     }
 
-    if (!listEl) return;
-    listEl.innerHTML = "";
+    if (listEl) {
+      listEl.innerHTML = "";
 
-    if (!devices.length) {
-      const okEl = document.createElement("div");
-      okEl.className = "bc-empty";
-      okEl.textContent = `Alle Batterien sind im grünen Bereich (keine Geräte ${threshold}).`;
-      listEl.appendChild(okEl);
-      return;
+      if (!devices.length) {
+        const okEl = document.createElement("div");
+        okEl.className = "bc-empty";
+        okEl.textContent = `Alle Batterien sind im grünen Bereich (keine Geräte ${threshold}).`;
+        listEl.appendChild(okEl);
+      } else {
+        devices.forEach((dev) => {
+          const row = document.createElement("div");
+          row.className = "bc-row";
+
+          const mainBtn = document.createElement("button");
+          mainBtn.type = "button";
+          mainBtn.className = "bc-row-main";
+          mainBtn.addEventListener("click", () => this._openMoreInfo(dev.entity_id));
+
+          const left = document.createElement("div");
+          left.className = "bc-row-left";
+
+          const name = document.createElement("div");
+          name.className = "bc-row-name";
+          name.textContent = dev.name || dev.entity_id;
+
+          const barBg = document.createElement("div");
+          barBg.className = "bc-bar-bg";
+          const barFill = document.createElement("div");
+          barFill.className = "bc-bar-fill";
+          const pct = Math.max(0, Math.min(100, Number(dev.level) || 0));
+          barFill.style.width = `${Math.max(4, pct)}%`;
+          barBg.appendChild(barFill);
+
+          left.appendChild(name);
+          left.appendChild(barBg);
+
+          const pctEl = document.createElement("div");
+          pctEl.className = "bc-pct";
+          pctEl.textContent = dev.level_formatted || `${pct} %`;
+
+          mainBtn.appendChild(left);
+          mainBtn.appendChild(pctEl);
+
+          const exclBtn = document.createElement("button");
+          exclBtn.type = "button";
+          exclBtn.className = "bc-action-btn";
+          exclBtn.title = "Gerät vom Batterie-Check ausschließen";
+          exclBtn.disabled = this._busy;
+          exclBtn.textContent = "✕";
+          const exclKey = dev.dedup_key || dev.entity_id;
+          exclBtn.addEventListener("click", (ev) =>
+            this._updateExclusion("exclude", exclKey, ev)
+          );
+
+          row.appendChild(mainBtn);
+          row.appendChild(exclBtn);
+          listEl.appendChild(row);
+        });
+      }
     }
 
-    devices.forEach((dev) => {
-      const row = document.createElement("button");
-      row.type = "button";
-      row.className = "bc-row";
-      row.addEventListener("click", () => this._openMoreInfo(dev.entity_id));
+    if (exclWrap && exclToggle && exclList) {
+      if (!excludedDevices.length) {
+        exclWrap.style.display = "none";
+      } else {
+        exclWrap.style.display = "block";
+        exclToggle.textContent = this._showExcluded
+          ? `Ausgeschlossene Geräte ausblenden (${excludedDevices.length})`
+          : `🚫 Ausgeschlossene Geräte anzeigen (${excludedDevices.length})`;
+        exclList.style.display = this._showExcluded ? "block" : "none";
+        exclList.innerHTML = "";
 
-      const left = document.createElement("div");
-      left.className = "bc-row-left";
+        if (this._showExcluded) {
+          excludedDevices.forEach((dev) => {
+            const row = document.createElement("div");
+            row.className = "bc-excl-row";
 
-      const name = document.createElement("div");
-      name.className = "bc-row-name";
-      name.textContent = dev.name || dev.entity_id;
+            const info = document.createElement("div");
+            info.className = "bc-excl-name";
+            const lvlPart =
+              dev.level !== null && dev.level !== undefined
+                ? ` (${dev.level_formatted})`
+                : "";
+            info.textContent = `${dev.name}${lvlPart}`;
 
-      const barBg = document.createElement("div");
-      barBg.className = "bc-bar-bg";
-      const barFill = document.createElement("div");
-      barFill.className = "bc-bar-fill";
-      const pct = Math.max(0, Math.min(100, Number(dev.level) || 0));
-      barFill.style.width = `${Math.max(4, pct)}%`;
-      barBg.appendChild(barFill);
+            const restoreBtn = document.createElement("button");
+            restoreBtn.type = "button";
+            restoreBtn.className = "bc-restore-btn";
+            restoreBtn.disabled = this._busy;
+            restoreBtn.textContent = "↩ Aufnehmen";
+            restoreBtn.addEventListener("click", (ev) =>
+              this._updateExclusion("include", dev.dedup_key || dev.entity_id, ev)
+            );
 
-      left.appendChild(name);
-      left.appendChild(barBg);
-
-      const pctEl = document.createElement("div");
-      pctEl.className = "bc-pct";
-      pctEl.textContent = dev.level_formatted || `${pct} %`;
-
-      row.appendChild(left);
-      row.appendChild(pctEl);
-      listEl.appendChild(row);
-    });
+            row.appendChild(info);
+            row.appendChild(restoreBtn);
+            exclList.appendChild(row);
+          });
+        }
+      }
+    }
   }
 
   _renderShell() {
@@ -1330,25 +1422,32 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
           padding: 8px 4px;
         }
         .bc-row {
-          width: 100%;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          border-bottom: 1px solid var(--divider-color);
+          padding: 2px 0;
+        }
+        .bc-row:last-child {
+          border-bottom: none;
+        }
+        .bc-row-main {
+          flex: 1;
+          min-width: 0;
           background: none;
           border: none;
           color: var(--primary-text-color);
           cursor: pointer;
           font-family: inherit;
           text-align: left;
-          padding: 7px 6px;
+          padding: 6px 6px;
           border-radius: 8px;
           display: flex;
           align-items: center;
           justify-content: space-between;
           gap: 10px;
-          border-bottom: 1px solid var(--divider-color);
         }
-        .bc-row:last-child {
-          border-bottom: none;
-        }
-        .bc-row:hover {
+        .bc-row-main:hover {
           background: var(--secondary-background-color);
         }
         .bc-row-left {
@@ -1382,6 +1481,89 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
           font-variant-numeric: tabular-nums;
           flex-shrink: 0;
         }
+        .bc-action-btn {
+          background: none;
+          border: 1px solid transparent;
+          color: var(--secondary-text-color);
+          cursor: pointer;
+          font-size: 12px;
+          width: 26px;
+          height: 26px;
+          border-radius: 6px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+        }
+        .bc-action-btn:hover {
+          background: var(--secondary-background-color);
+          color: var(--error-color, #db4437);
+          border-color: var(--divider-color);
+        }
+        .bc-action-btn:disabled {
+          opacity: 0.45;
+          cursor: default;
+        }
+        .bc-excl-wrap {
+          display: none;
+          margin-top: 8px;
+          padding-top: 8px;
+          border-top: 1px dashed var(--divider-color);
+        }
+        .bc-excl-toggle {
+          width: 100%;
+          background: none;
+          border: none;
+          color: var(--secondary-text-color);
+          cursor: pointer;
+          font-family: inherit;
+          font-size: 11px;
+          text-align: center;
+          padding: 4px;
+        }
+        .bc-excl-toggle:hover {
+          color: var(--primary-color);
+        }
+        .bc-excl-list {
+          margin-top: 4px;
+          max-height: 160px;
+          overflow-y: auto;
+        }
+        .bc-excl-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          padding: 5px 4px;
+          font-size: 12px;
+          color: var(--secondary-text-color);
+        }
+        .bc-excl-name {
+          min-width: 0;
+          flex: 1;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .bc-restore-btn {
+          background: var(--secondary-background-color);
+          border: 1px solid var(--divider-color);
+          color: var(--primary-text-color);
+          cursor: pointer;
+          font-family: inherit;
+          font-size: 11px;
+          padding: 3px 8px;
+          border-radius: 6px;
+          flex-shrink: 0;
+        }
+        .bc-restore-btn:hover {
+          border-color: var(--primary-color);
+          color: var(--primary-color);
+        }
+        .bc-restore-btn:disabled {
+          opacity: 0.5;
+          cursor: default;
+        }
       </style>
       <ha-card>
         <div id="bc-header" class="bc-header">
@@ -1400,6 +1582,10 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
         </div>
         <div id="bc-list-wrap" class="bc-list-wrap">
           <div id="bc-list" class="bc-list"></div>
+          <div id="bc-excl-wrap" class="bc-excl-wrap">
+            <button id="bc-excl-toggle" class="bc-excl-toggle" type="button"></button>
+            <div id="bc-excl-list" class="bc-excl-list"></div>
+          </div>
         </div>
       </ha-card>
     `;
@@ -1412,6 +1598,10 @@ class WohnsinnigVernetztBatteryCard extends HTMLElement {
       this._open = true;
       this._fetchLiveCheck();
     });
+    this.shadowRoot.getElementById("bc-excl-toggle").addEventListener("click", () => {
+      this._showExcluded = !this._showExcluded;
+      this._render();
+    });
   }
 }
 
@@ -1422,9 +1612,10 @@ if (!window.customCards.some((c) => c.type === "wohnsinnig-vernetzt-battery-card
   window.customCards.push({
     type: "wohnsinnig-vernetzt-battery-card",
     name: "Wohnsinnig vernetzt Batterie-Check",
-    description: "Zeigt auf einen Klick live alle Geräte mit weniger als 15 % Batteriestand an.",
+    description: "Zeigt auf einen Klick live alle Geräte unter der Batterie-Grenze – inkl. 1-Klick-Ausschluss.",
   });
 }
+
 class WohnsinnigVernetztSilentSensorsCard extends HTMLElement {
   constructor() {
     super();
