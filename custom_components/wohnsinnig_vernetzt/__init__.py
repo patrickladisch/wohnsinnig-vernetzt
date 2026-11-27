@@ -36,6 +36,7 @@ from .const import (
     CONF_PRESENCE_ENTITIES,
     CONF_PRESENCE_JITTER_MINUTES,
     CONF_PRESENCE_PAUSE_AUTOMATIONS,
+    CONF_PRESENCE_SENSORS,
     CONF_RSS_URL,
     CONF_SCAN_INTERVAL,
     CONF_SILENT_HOURS,
@@ -92,6 +93,7 @@ from .const import (
     SERVICE_RUN_BATTERY_CHECK,
     SERVICE_RUN_SILENT_SENSORS_CHECK,
     SERVICE_START_WAKEUP,
+    SERVICE_EVALUATE_PRESENCE_SENSORS,
     SERVICE_EVALUATE_PV,
     SERVICE_RESET_PV_DAILY,
     SERVICE_STOP_WAKEUP,
@@ -119,10 +121,15 @@ from .pv_surplus import (
     normalize_pv_rules,
     normalize_sensor_entity,
 )
+from .presence_sensors import (
+    get_presence_sensor_candidates,
+    normalize_presence_sensor_defs,
+)
 
 PLATFORMS: list[Platform] = [
     Platform.MEDIA_PLAYER,
     Platform.SENSOR,
+    Platform.BINARY_SENSOR,
     Platform.SELECT,
     Platform.SWITCH,
     Platform.NUMBER,
@@ -211,6 +218,7 @@ class WohnsinnigVernetztEpisodesView(HomeAssistantView):
                 "presence": coordinator.presence_manager.get_status_snapshot(),
                 "wakeup": coordinator.wakeup_manager.get_status_snapshot(),
                 "pv": coordinator.pv_manager.get_status_snapshot(),
+                "presence_sensors": coordinator.presence_sensors_manager.get_overview_snapshot(),
                 "spotify_show_id": coordinator.spotify_show_id,
                 "spotify_show_url": coordinator.spotify_show_url,
                 "target_entity": coordinator.target_entity,
@@ -695,6 +703,53 @@ class WohnsinnigVernetztPvTriggerView(HomeAssistantView):
         return self.json({"status": "ok"})
 
 
+class WohnsinnigVernetztPresenceSensorsConfigView(HomeAssistantView):
+    """Liefert und speichert beliebig viele kombinierte Anwesenheitssensoren."""
+
+    url = f"/api/{DOMAIN}/presence_sensors_config"
+    name = f"api:{DOMAIN}:presence_sensors_config"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        domain_data = hass.data.get(DOMAIN, {})
+        coordinator: WohnsinnigVernetztCoordinator | None = domain_data.get(
+            "coordinator"
+        )
+        if coordinator is None:
+            return self.json({"error": "Integration nicht geladen."}, status_code=503)
+
+        cands = get_presence_sensor_candidates(hass)
+        return self.json(
+            {
+                "presence_sensors": list(
+                    coordinator.presence_sensors_manager.sensor_defs
+                ),
+                "overview": coordinator.presence_sensors_manager.get_overview_snapshot(),
+                **cands,
+            }
+        )
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if not entries:
+            return self.json({"error": "Kein Config Entry gefunden."}, status_code=404)
+        entry = entries[0]
+
+        try:
+            payload = await request.json()
+        except ValueError:
+            return self.json({"error": "Ungültiges JSON."}, status_code=400)
+
+        sensors = normalize_presence_sensor_defs(payload.get("presence_sensors") or [])
+        merged = {**entry.data, **entry.options}
+        merged[CONF_PRESENCE_SENSORS] = sensors
+
+        hass.config_entries.async_update_entry(entry, options=merged)
+        return self.json({"status": "ok", "sensors_count": len(sensors)})
+
+
 LEGACY_ENTITY_UNIQUE_ID_SUFFIXES = (
     "_send_feedback",
     "_feedback_message",
@@ -704,8 +759,16 @@ LEGACY_ENTITY_UNIQUE_ID_SUFFIXES = (
 
 
 def _cleanup_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Entfernt veraltete Entitäten dauerhaft aus der HA-Entity-Registry."""
+    """Entfernt veraltete sowie gelöschte Anwesenheitssensor-Entitäten sauber aus der Entity-Registry."""
     ent_reg = er.async_get(hass)
+    config = {**entry.data, **entry.options}
+    active_ps_uids = {
+        f"{entry.entry_id}_presence_sensor_{s['id']}"
+        for s in normalize_presence_sensor_defs(config.get(CONF_PRESENCE_SENSORS) or [])
+        if s.get("enabled", True)
+    }
+    ps_prefix = f"{entry.entry_id}_presence_sensor_"
+
     for reg_entry in list(er.async_entries_for_config_entry(ent_reg, entry.entry_id)):
         uid = reg_entry.unique_id or ""
         if (
@@ -713,6 +776,8 @@ def _cleanup_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
             or "feedback" in uid.lower()
             or "feedback" in reg_entry.entity_id.lower()
         ):
+            ent_reg.async_remove(reg_entry.entity_id)
+        elif uid.startswith(ps_prefix) and uid not in active_ps_uids:
             ent_reg.async_remove(reg_entry.entity_id)
 
 
@@ -757,6 +822,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(WohnsinnigVernetztWakeUpConfigView())
         hass.http.register_view(WohnsinnigVernetztPvConfigView())
         hass.http.register_view(WohnsinnigVernetztPvTriggerView())
+        hass.http.register_view(WohnsinnigVernetztPresenceSensorsConfigView())
         domain_data["frontend_registered"] = True
 
     config = {**entry.data, **entry.options}
@@ -834,6 +900,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             config.get(CONF_PV_INVERT_SURPLUS, DEFAULT_PV_INVERT_SURPLUS)
         ),
         pv_rules=config.get(CONF_PV_RULES),
+        presence_sensors=config.get(CONF_PRESENCE_SENSORS),
         default_target=config.get(CONF_DEFAULT_TARGET, BROWSER_TARGET),
     )
 
@@ -862,11 +929,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await coordinator.async_init_presence_simulation()
         await coordinator.async_init_wakeup_light()
         await coordinator.async_init_pv_surplus()
+        await coordinator.async_init_presence_sensors()
     else:
         async def _run_after_ha_started(_event: Event) -> None:
             await coordinator.async_init_presence_simulation()
             await coordinator.async_init_wakeup_light()
             await coordinator.async_init_pv_surplus()
+            await coordinator.async_init_presence_sensors()
             await coordinator.async_run_battery_check(notify=False)
             await coordinator.async_run_silent_sensors_check(notify=False)
 
@@ -1073,6 +1142,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _handle_reset_pv_daily,
         )
 
+    if not hass.services.has_service(DOMAIN, SERVICE_EVALUATE_PRESENCE_SENSORS):
+        async def _handle_evaluate_presence_sensors(call: ServiceCall) -> None:
+            coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
+                DOMAIN, {}
+            ).get("coordinator")
+            if coord is None:
+                raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
+            await coord.presence_sensors_manager.async_evaluate()
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_EVALUATE_PRESENCE_SENSORS,
+            _handle_evaluate_presence_sensors,
+        )
+
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -1091,6 +1175,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await coordinator.async_shutdown_presence()
         await coordinator.async_shutdown_wakeup_light()
         await coordinator.async_shutdown_pv_surplus()
+        await coordinator.async_shutdown_presence_sensors()
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
@@ -1108,6 +1193,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_STOP_WAKEUP,
             SERVICE_EVALUATE_PV,
             SERVICE_RESET_PV_DAILY,
+            SERVICE_EVALUATE_PRESENCE_SENSORS,
         ):
             if hass.services.has_service(DOMAIN, svc):
                 hass.services.async_remove(DOMAIN, svc)

@@ -12,6 +12,7 @@ from .const import (
     DEVICE_SECTION_BLUEPRINTS,
     DEVICE_SECTION_CHECKS,
     DEVICE_SECTION_PRESENCE,
+    DEVICE_SECTION_PRESENCE_SENSORS,
     DEVICE_SECTION_PV,
     DEVICE_SECTION_WAKEUP,
     DOMAIN,
@@ -41,6 +42,7 @@ async def async_setup_entry(
             WohnsinnigVernetztPvStatusSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztPvSurplusPowerSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztPvBatterySocSensor(coordinator, entry.entry_id),
+            WohnsinnigVernetztPresenceSensorsOverviewSensor(coordinator, entry.entry_id),
         ]
     )
 
@@ -523,3 +525,40 @@ class WohnsinnigVernetztPvBatterySocSensor(WohnsinnigVernetztEntity, SensorEntit
     @property
     def native_value(self) -> float | None:
         return self.coordinator.pv_manager.get_current_battery_soc()
+
+
+class WohnsinnigVernetztPresenceSensorsOverviewSensor(
+    WohnsinnigVernetztEntity, SensorEntity
+):
+    """Übersichts-Sensor für alle kombinierten Anwesenheitssensoren (Personen & Alarmanlage)."""
+
+    _device_section = DEVICE_SECTION_PRESENCE_SENSORS
+    _attr_name = "Status"
+    _unrecorded_attributes = frozenset({"sensoren_details"})
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "presence_sensors_overview")
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.presence_sensors_manager.get_overview_snapshot()["status"]
+
+    @property
+    def icon(self) -> str:
+        snap = self.coordinator.presence_sensors_manager.get_overview_snapshot()
+        return "mdi:home-account" if snap["anyone_home"] else "mdi:shield-home-outline"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        snap = self.coordinator.presence_sensors_manager.get_overview_snapshot()
+        return {
+            "jemand_zuhause": snap["anyone_home"],
+            "sensoren_gesamt": snap["sensors_count"],
+            "zuhause_anzahl": snap["home_count"],
+            "abwesend_anzahl": snap["away_count"],
+            "personen_zuhause": snap["home_names"],
+            "personen_abwesend": snap["away_names"],
+            "sensoren_details": snap["sensors"],
+        }

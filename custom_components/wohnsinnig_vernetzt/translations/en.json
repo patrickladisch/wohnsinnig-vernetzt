@@ -25,6 +25,7 @@
         "title": "Configure Wohnsinnig vernetzt",
         "description": "Choose the section you want to configure.",
         "menu_options": {
+          "presence_sensors": "👤 Presence Sensors (People & Alarm)",
           "pv": "☀️ PV Surplus (Sensors & Actions)",
           "wakeup": "🌅 Wake-Up Light (Lights, Phone Alarm, Duration & Automations)",
           "presence": "🏠 Presence Simulation (Lights, Switches & Motion Guard)",
@@ -121,7 +122,39 @@
         "data": {
           "delete_ids": "Actions to remove"
         }
+      },
+      "presence_sensors": {
+        "title": "Combined Presence Sensors",
+        "description": "Create multiple combined presence sensors (e.g. for each family member) as native binary_sensor entities for automations.",
+        "menu_options": {
+          "presence_sensors_add": "➕ Add new presence sensor",
+          "presence_sensors_delete": "🗑️ Delete presence sensor"
+        }
+      },
+      "presence_sensors_add": {
+        "title": "Add Combined Presence Sensor",
+        "data": {
+          "name": "Name (e.g. Patrick, Wife, Child)",
+          "location_entities": "Location / phone / person",
+          "wifi_entities": "Wi-Fi sensors / router trackers (optional)",
+          "home_wifi_ssids": "Home Wi-Fi SSIDs (comma-separated, for phone Wi-Fi sensors)",
+          "motion_entities": "Motion / occupancy sensors (optional)",
+          "motion_timeout_minutes": "No motion timeout (minutes)",
+          "extra_entities": "Additional status entities (optional)",
+          "combine_mode": "Combination logic",
+          "away_delay_minutes": "Delay before switching to Away (minutes)",
+          "include_in_anyone_home": "Include in 'Anyone home' master sensor"
+        }
+      },
+      "presence_sensors_delete": {
+        "title": "Delete Presence Sensor",
+        "data": {
+          "delete_ids": "Sensors to remove"
+        }
       }
+    },
+    "error": {
+      "no_presence_source": "Please select at least one source (location, Wi-Fi, motion, or extra)."
     }
   },
   "device_automation": {

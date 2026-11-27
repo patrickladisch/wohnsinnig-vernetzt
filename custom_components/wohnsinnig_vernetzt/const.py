@@ -1,7 +1,7 @@
 """Konstanten für Wohnsinnig vernetzt."""
 
 DOMAIN = "wohnsinnig_vernetzt"
-VERSION = "2.9.0"
+VERSION = "2.10.0"
 
 DEFAULT_RSS_URL = "https://anchor.fm/s/111a8abd0/podcast/rss"
 DEFAULT_BLUEPRINTS_URL = "https://www.wohnsinnigvernetzt.de/"
@@ -95,6 +95,7 @@ DEVICE_SECTION_BLUEPRINTS = "blueprints"
 DEVICE_SECTION_CHECKS = "checks"
 DEVICE_SECTION_WAKEUP = "wakeup"
 DEVICE_SECTION_PV = "pv"
+DEVICE_SECTION_PRESENCE_SENSORS = "presence_sensors"
 
 DEVICE_NAME = "Wohnsinnig vernetzt – Audio & Podcast"
 DEVICE_MODEL = "Podcast: Wohnsinnig vernetzt"
@@ -192,3 +193,20 @@ EVENT_PV_ACTION_STOPPED = f"{DOMAIN}_pv_action_stopped"
 
 SERVICE_EVALUATE_PV = "evaluate_pv_surplus"
 SERVICE_RESET_PV_DAILY = "reset_pv_daily_triggers"
+
+# Kombinierte Anwesenheitssensoren (Personen & Alarmanlage)
+PRESENCE_COMBINE_ANY = "any_present"
+PRESENCE_COMBINE_ALL = "all_present"
+PRESENCE_COMBINE_MODE_LABELS = {
+    PRESENCE_COMBINE_ANY: "Sicher (Alarmanlage): Abwesend erst wenn ALLE Quellen abwesend",
+    PRESENCE_COMBINE_ALL: "Strikt: Zuhause nur wenn ALLE Quellen gleichzeitig aktiv",
+}
+
+DEFAULT_PRESENCE_MOTION_TIMEOUT = 15
+DEFAULT_PRESENCE_AWAY_DELAY = 2
+
+CONF_PRESENCE_SENSORS = "presence_sensors"
+
+EVENT_PRESENCE_SENSOR_CHANGED = f"{DOMAIN}_presence_sensor_changed"
+
+SERVICE_EVALUATE_PRESENCE_SENSORS = "evaluate_presence_sensors"

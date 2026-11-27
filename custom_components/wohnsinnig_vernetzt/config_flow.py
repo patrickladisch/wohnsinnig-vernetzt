@@ -30,6 +30,7 @@ from .const import (
     CONF_PRESENCE_ENTITIES,
     CONF_PRESENCE_JITTER_MINUTES,
     CONF_PRESENCE_PAUSE_AUTOMATIONS,
+    CONF_PRESENCE_SENSORS,
     CONF_RSS_URL,
     CONF_SCAN_INTERVAL,
     CONF_SILENT_HOURS,
@@ -57,7 +58,11 @@ from .const import (
     DEFAULT_LOGO_URL,
     DEFAULT_NOTIFY_SERVICES,
     DEFAULT_PRESENCE_AUTO_PAUSE_MOTION,
+    DEFAULT_PRESENCE_AWAY_DELAY,
     DEFAULT_PRESENCE_JITTER_MINUTES,
+    DEFAULT_PRESENCE_MOTION_TIMEOUT,
+    PRESENCE_COMBINE_ANY,
+    PRESENCE_COMBINE_MODE_LABELS,
     DEFAULT_RSS_URL,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SILENT_HOURS,
@@ -88,6 +93,15 @@ from .notify_helpers import get_mobile_app_services, get_notify_choices
 from .presence_simulation import (
     normalize_automation_entities,
     normalize_presence_entities,
+)
+from .presence_sensors import (
+    EXTRA_DOMAINS,
+    LOCATION_DOMAINS,
+    MOTION_DOMAINS,
+    WIFI_DOMAINS,
+    normalize_presence_sensor_def,
+    normalize_presence_sensor_defs,
+    normalize_ssid_list,
 )
 from .wakeup_light import (
     get_alarm_sensor_candidates,
@@ -523,6 +537,58 @@ def _build_pv_add_rule_schema() -> vol.Schema:
     )
 
 
+def _build_add_presence_sensor_schema() -> vol.Schema:
+    mode_opts = [
+        selector.SelectOptionDict(value=k, label=v)
+        for k, v in PRESENCE_COMBINE_MODE_LABELS.items()
+    ]
+    return vol.Schema(
+        {
+            vol.Required("name", default="Patrick"): str,
+            vol.Optional("location_entities", default=[]): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=list(LOCATION_DOMAINS),
+                    multiple=True,
+                )
+            ),
+            vol.Optional("wifi_entities", default=[]): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=list(WIFI_DOMAINS),
+                    multiple=True,
+                )
+            ),
+            vol.Optional("home_wifi_ssids", default=""): str,
+            vol.Optional("motion_entities", default=[]): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=list(MOTION_DOMAINS),
+                    multiple=True,
+                )
+            ),
+            vol.Required(
+                "motion_timeout_minutes", default=DEFAULT_PRESENCE_MOTION_TIMEOUT
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=240)),
+            vol.Optional("extra_entities", default=[]): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=list(EXTRA_DOMAINS),
+                    multiple=True,
+                )
+            ),
+            vol.Required(
+                "combine_mode", default=PRESENCE_COMBINE_ANY
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=mode_opts,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                "away_delay_minutes", default=DEFAULT_PRESENCE_AWAY_DELAY
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=120)),
+            vol.Required("include_in_anyone_home", default=True): bool,
+        }
+    )
+
+
 class WohnsinnigVernetztConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Einrichtungsassistent für Wohnsinnig vernetzt."""
 
@@ -593,12 +659,74 @@ class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
             current[CONF_PV_BATTERY_ENTITY] = pm_pv.battery_entity
             current[CONF_PV_INVERT_SURPLUS] = pm_pv.invert_surplus
             current[CONF_PV_RULES] = list(pm_pv.rules)
+            current[CONF_PRESENCE_SENSORS] = list(
+                coordinator.presence_sensors_manager.sensor_defs
+            )
         return current
 
     async def async_step_init(self, user_input=None):
         return self.async_show_menu(
             step_id="init",
-            menu_options=["pv", "wakeup", "presence", "monitoring", "podcast"],
+            menu_options=["presence_sensors", "pv", "wakeup", "presence", "monitoring", "podcast"],
+        )
+
+    async def async_step_presence_sensors(self, user_input=None):
+        current = self._current_merged()
+        sensors = normalize_presence_sensor_defs(current.get(CONF_PRESENCE_SENSORS))
+        opts = ["presence_sensors_add"]
+        if sensors:
+            opts.append("presence_sensors_delete")
+        return self.async_show_menu(step_id="presence_sensors", menu_options=opts)
+
+    async def async_step_presence_sensors_add(self, user_input=None):
+        current = self._current_merged()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            sensors = normalize_presence_sensor_defs(current.get(CONF_PRESENCE_SENSORS))
+            payload = dict(user_input)
+            payload["home_wifi_ssids"] = normalize_ssid_list(
+                payload.get("home_wifi_ssids")
+            )
+            new_def = normalize_presence_sensor_def(payload, index=len(sensors) + 1)
+            if new_def is None:
+                errors["base"] = "no_presence_source"
+            else:
+                sensors.append(new_def)
+                merged = {**current, CONF_PRESENCE_SENSORS: sensors}
+                return self.async_create_entry(title="", data=merged)
+
+        return self.async_show_form(
+            step_id="presence_sensors_add",
+            data_schema=_build_add_presence_sensor_schema(),
+            errors=errors,
+        )
+
+    async def async_step_presence_sensors_delete(self, user_input=None):
+        current = self._current_merged()
+        sensors = normalize_presence_sensor_defs(current.get(CONF_PRESENCE_SENSORS))
+        if user_input is not None:
+            to_delete = set(user_input.get("delete_ids") or [])
+            remaining = [s for s in sensors if s["id"] not in to_delete]
+            merged = {**current, CONF_PRESENCE_SENSORS: remaining}
+            return self.async_create_entry(title="", data=merged)
+
+        del_opts = [
+            selector.SelectOptionDict(value=s["id"], label=s["name"])
+            for s in sensors
+        ]
+        schema = vol.Schema(
+            {
+                vol.Optional("delete_ids", default=[]): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=del_opts,
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            }
+        )
+        return self.async_show_form(
+            step_id="presence_sensors_delete", data_schema=schema
         )
 
     async def async_step_pv(self, user_input=None):

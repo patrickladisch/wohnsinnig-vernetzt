@@ -97,6 +97,10 @@ from .pv_surplus import (
     normalize_pv_rules,
     normalize_sensor_entity,
 )
+from .presence_sensors import (
+    PresenceSensorsManager,
+    normalize_presence_sensor_defs,
+)
 
 _LOGGER = logging.getLogger(__name__)
 ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"
@@ -314,6 +318,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         pv_battery_entity: str = DEFAULT_PV_BATTERY_ENTITY,
         pv_invert_surplus: bool = DEFAULT_PV_INVERT_SURPLUS,
         pv_rules: list[dict] | None = None,
+        presence_sensors: list[dict] | None = None,
         default_target: str = BROWSER_TARGET,
     ) -> None:
         super().__init__(
@@ -403,6 +408,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.wakeup_config_request_user: str | None = None
         self.pv_config_request_id: int = 0
         self.pv_config_request_user: str | None = None
+        self.presence_sensors_config_request_id: int = 0
+        self.presence_sensors_config_request_user: str | None = None
         self._persisted_presence_enabled: bool = False
         self._persisted_paused_automations: list[str] = []
         self.presence_manager = PresenceSimulationManager(
@@ -456,6 +463,15 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             battery_entity=normalize_sensor_entity(pv_battery_entity),
             invert_surplus=bool(pv_invert_surplus),
             rules=normalize_pv_rules(pv_rules or []),
+        )
+
+        self._persisted_ps_motion_ts: dict[str, float] = {}
+        self._persisted_ps_states: dict[str, bool] = {}
+        self.presence_sensors_manager = PresenceSensorsManager(
+            hass=hass,
+            on_update=self.async_update_listeners,
+            on_persist=self._async_save_state,
+            sensor_defs=normalize_presence_sensor_defs(presence_sensors or []),
         )
         self._state_loaded: bool = False
 
@@ -592,6 +608,10 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 self._persisted_pv_triggered_today = dict(stored["pv_triggered_today"])
             if isinstance(stored.get("pv_active_rules"), list):
                 self._persisted_pv_active_rules = [str(x) for x in stored["pv_active_rules"]]
+            if isinstance(stored.get("presence_sensors_motion_ts"), dict):
+                self._persisted_ps_motion_ts = dict(stored["presence_sensors_motion_ts"])
+            if isinstance(stored.get("presence_sensors_states"), dict):
+                self._persisted_ps_states = dict(stored["presence_sensors_states"])
 
         self._state_loaded = True
 
@@ -650,6 +670,12 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "pv_enabled": self.pv_manager.enabled,
                 "pv_triggered_today": dict(self.pv_manager.triggered_today),
                 "pv_active_rules": list(self.pv_manager.active_rule_ids),
+                "presence_sensors_motion_ts": self.presence_sensors_manager.get_persisted_state_payload()[
+                    "motion_ts"
+                ],
+                "presence_sensors_states": self.presence_sensors_manager.get_persisted_state_payload()[
+                    "states"
+                ],
             }
         )
 
@@ -704,6 +730,20 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
     async def async_shutdown_pv_surplus(self) -> None:
         """Beendet PV-Listener und Timer sauber."""
         await self.pv_manager.async_shutdown()
+
+    async def async_init_presence_sensors(self) -> None:
+        """Initialisiert alle kombinierten Anwesenheitssensoren inkl. Bewegungs-Zeitstempeln."""
+        await self._async_load_state()
+        await self.presence_sensors_manager.async_initialize(
+            persisted_motion_ts=self._persisted_ps_motion_ts,
+            persisted_states=self._persisted_ps_states,
+        )
+        await self._async_save_state()
+        self.async_update_listeners()
+
+    async def async_shutdown_presence_sensors(self) -> None:
+        """Beendet alle Listener & Timer der Anwesenheitssensoren sauber."""
+        await self.presence_sensors_manager.async_shutdown()
 
     def get_battery_reset_threshold(self) -> int:
         """Ab diesem Prozentwert gilt eine Batterie als gewechselt (Anti-Spam-Hysterese)."""

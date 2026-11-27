@@ -122,3 +122,7 @@ evaluate_pv_surplus:
 reset_pv_daily_triggers:
   name: PV-Tageszähler zurücksetzen
   description: Setzt alle „Nur 1× pro Tag“-Merker der PV-Aktionen zurück, damit z. B. der Geschirrspüler erneut starten darf.
+
+evaluate_presence_sensors:
+  name: Anwesenheitssensoren jetzt prüfen
+  description: Bewertet alle kombinierten Anwesenheitssensoren (Standort, WLAN & Bewegungsmelder) sofort neu.

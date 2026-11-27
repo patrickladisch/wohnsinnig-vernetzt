@@ -25,6 +25,7 @@
         "title": "Wohnsinnig vernetzt konfigurieren",
         "description": "Wähle den Bereich, den du anpassen möchtest.",
         "menu_options": {
+          "presence_sensors": "👤 Anwesenheitssensoren (Personen & Alarmanlage)",
           "pv": "☀️ PV-Überschuss (Sensoren & Aktionen)",
           "wakeup": "🌅 Wake-Up Light (Lampen, Handy-Wecker, Dauer & Automationen)",
           "presence": "🏠 Anwesenheitssimulation (Lampen, Schalter & Bewegungsmelder)",
@@ -124,7 +125,41 @@
         "data": {
           "delete_ids": "Zu löschende Aktionen"
         }
+      },
+      "presence_sensors": {
+        "title": "Kombinierte Anwesenheitssensoren",
+        "description": "Lege beliebig viele Sensoren (z. B. für dich, Frau, Kind) an. Jeder Sensor wird als eigene binary_sensor-Entität für deine Automationen erstellt.",
+        "menu_options": {
+          "presence_sensors_add": "➕ Neuen Anwesenheitssensor anlegen",
+          "presence_sensors_delete": "🗑️ Anwesenheitssensor löschen"
+        }
+      },
+      "presence_sensors_add": {
+        "title": "Neuen Anwesenheitssensor anlegen",
+        "description": "Kombiniere Standort/Handy, WLAN und Bewegungsmelder-Timeout zu einem zuverlässigen Sensor für Alarmanlage & Automationen.",
+        "data": {
+          "name": "Name (z. B. Patrick, Frau, Kind, Haus)",
+          "location_entities": "Standort / Handy / Person (person.*, device_tracker.*)",
+          "wifi_entities": "WLAN-Sensoren / Router-Tracker (optional)",
+          "home_wifi_ssids": "Heim-WLAN-Namen / SSIDs (kommagetrennt, für Handy-WLAN-Sensoren)",
+          "motion_entities": "Bewegungsmelder / Präsenzmelder (optional)",
+          "motion_timeout_minutes": "Keine Bewegung seit (Minuten)",
+          "extra_entities": "Weitere Status-Entitäten (optional)",
+          "combine_mode": "Kombinations-Logik",
+          "away_delay_minutes": "Verzögerung vor „Abwesend“ (Minuten)",
+          "include_in_anyone_home": "In Sammel-Sensor „Jemand zuhause“ einbeziehen"
+        }
+      },
+      "presence_sensors_delete": {
+        "title": "Anwesenheitssensor löschen",
+        "description": "Wähle die Sensoren aus, die entfernt werden sollen.",
+        "data": {
+          "delete_ids": "Zu löschende Anwesenheitssensoren"
+        }
       }
+    },
+    "error": {
+      "no_presence_source": "Bitte wähle mindestens eine Quelle (Standort, WLAN, Bewegungsmelder oder Zusatz) aus."
     }
   },
   "device_automation": {

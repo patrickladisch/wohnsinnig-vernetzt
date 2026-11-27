@@ -12,6 +12,7 @@ from .const import (
     DEVICE_SECTION_BLUEPRINTS,
     DEVICE_SECTION_CHECKS,
     DEVICE_SECTION_PRESENCE,
+    DEVICE_SECTION_PRESENCE_SENSORS,
     DEVICE_SECTION_PV,
     DEVICE_SECTION_WAKEUP,
     DOMAIN,
@@ -40,6 +41,9 @@ async def async_setup_entry(
             WohnsinnigVernetztOpenPvConfigButton(coordinator, entry.entry_id),
             WohnsinnigVernetztEvaluatePvButton(coordinator, entry.entry_id),
             WohnsinnigVernetztResetPvDailyButton(coordinator, entry.entry_id),
+            # Kombinierte Anwesenheitssensoren
+            WohnsinnigVernetztOpenPresenceSensorsConfigButton(coordinator, entry.entry_id),
+            WohnsinnigVernetztEvaluatePresenceSensorsButton(coordinator, entry.entry_id),
             # Blueprints
             WohnsinnigVernetztImportBlueprintButton(coordinator, entry.entry_id),
             WohnsinnigVernetztImportAllBlueprintsButton(coordinator, entry.entry_id),
@@ -338,3 +342,59 @@ class WohnsinnigVernetztResetPvDailyButton(WohnsinnigVernetztEntity, ButtonEntit
 
     async def async_press(self) -> None:
         await self.coordinator.pv_manager.async_reset_daily_triggers()
+
+
+class WohnsinnigVernetztOpenPresenceSensorsConfigButton(
+    WohnsinnigVernetztEntity, ButtonEntity
+):
+    """Öffnet direkt den Dialog zum Anlegen/Bearbeiten kombinierter Anwesenheitssensoren."""
+
+    _device_section = DEVICE_SECTION_PRESENCE_SENSORS
+    _attr_name = "Konfiguration öffnen"
+    _attr_icon = "mdi:tune-variant"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "presence_sensors_open_config")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "wv_open_config": "presence_sensors",
+            "open_request_id": self.coordinator.presence_sensors_config_request_id,
+            "open_request_user": self.coordinator.presence_sensors_config_request_user,
+        }
+
+    async def async_press(self) -> None:
+        user_id = self._context.user_id if self._context else None
+        self.coordinator.presence_sensors_config_request_id += 1
+        self.coordinator.presence_sensors_config_request_user = user_id
+        self.async_write_ha_state()
+        self.hass.bus.async_fire(
+            EVENT_OPEN_CONFIG,
+            {
+                "section": "presence_sensors",
+                "entry_id": self._entry_id,
+                "request_id": self.coordinator.presence_sensors_config_request_id,
+                "user_id": user_id,
+            },
+        )
+
+
+class WohnsinnigVernetztEvaluatePresenceSensorsButton(
+    WohnsinnigVernetztEntity, ButtonEntity
+):
+    """Prüft sofort alle kombinierten Anwesenheitssensoren neu."""
+
+    _device_section = DEVICE_SECTION_PRESENCE_SENSORS
+    _attr_name = "Jetzt prüfen"
+    _attr_icon = "mdi:account-search-outline"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "presence_sensors_evaluate_now")
+
+    async def async_press(self) -> None:
+        await self.coordinator.presence_sensors_manager.async_evaluate()

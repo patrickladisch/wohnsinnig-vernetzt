@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.9.0
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.10.0
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -5041,9 +5041,937 @@ window.__wvOpenPvConfigDialog = function (hass) {
   dlg.open(activeHass);
 };
 
-// Doppelte Event- & State-Bridge für Anwesenheitssimulation, Wake-Up Light UND PV-Überschuss
-if (!window.__wvConfigBridgeV4Initialized) {
-  window.__wvConfigBridgeV4Initialized = true;
+class WohnsinnigVernetztPresenceSensorsCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = { title: "Anwesenheit" };
+    this._lastKey = null;
+  }
+
+  static getStubConfig() {
+    return { title: "Anwesenheit" };
+  }
+
+  connectedCallback() {
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    this._render();
+  }
+
+  setConfig(config) {
+    this._config = {
+      title: "Anwesenheit",
+      ...(config || {}),
+    };
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    this._render();
+  }
+
+  _findOverview(hass) {
+    if (!hass || !hass.states) return null;
+    return (
+      hass.states["sensor.wohnsinnig_vernetzt_anwesenheitssensoren_status"] ||
+      Object.values(hass.states).find(
+        (s) =>
+          s.entity_id.startsWith("sensor.wohnsinnig_vernetzt") &&
+          s.attributes &&
+          "sensoren_details" in s.attributes &&
+          "jemand_zuhause" in s.attributes
+      )
+    );
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    const ov = this._findOverview(hass);
+    const attrs = ov?.attributes || {};
+    const details = Array.isArray(attrs.sensoren_details) ? attrs.sensoren_details : [];
+    const key = [
+      ov ? ov.state : "",
+      attrs.jemand_zuhause ?? "",
+      details.map((d) => `${d.id}:${d.is_present}:${d.reason}`).join(";"),
+    ].join("|");
+    if (key !== this._lastKey) {
+      this._lastKey = key;
+      this._render();
+    }
+  }
+
+  getCardSize() {
+    return 4;
+  }
+
+  _render() {
+    if (!this.shadowRoot || this.shadowRoot.innerHTML === "") return;
+    const ov = this._findOverview(this._hass);
+    const attrs = ov?.attributes || {};
+    const sensors = Array.isArray(attrs.sensoren_details) ? attrs.sensoren_details : [];
+    const anyoneHome = Boolean(attrs.jemand_zuhause);
+
+    const titleEl = this.shadowRoot.getElementById("prs-title");
+    const subEl = this.shadowRoot.getElementById("prs-sub");
+    const badgeEl = this.shadowRoot.getElementById("prs-badge");
+    const listEl = this.shadowRoot.getElementById("prs-list");
+
+    if (titleEl) titleEl.textContent = this._config.title || "Anwesenheit";
+    if (subEl) {
+      subEl.textContent = ov ? ov.state : "Noch keine Sensoren angelegt";
+    }
+    if (badgeEl) {
+      if (!sensors.length) {
+        badgeEl.textContent = "Leer";
+        badgeEl.className = "prs-badge away";
+      } else {
+        badgeEl.textContent = anyoneHome ? "Zuhause" : "Alle weg";
+        badgeEl.className = `prs-badge ${anyoneHome ? "home" : "away"}`;
+      }
+    }
+
+    if (listEl) {
+      listEl.innerHTML = "";
+      if (!sensors.length) {
+        const empty = document.createElement("div");
+        empty.className = "prs-empty";
+        empty.textContent = "Tippe oben rechts auf ⚙️, um Anwesenheitssensoren (z. B. für dich, Frau & Kind) anzulegen.";
+        listEl.appendChild(empty);
+      } else {
+        sensors.forEach((s) => {
+          const row = document.createElement("div");
+          row.className = "prs-row";
+
+          const left = document.createElement("div");
+          left.className = "prs-row-left";
+          const name = document.createElement("div");
+          name.className = "prs-row-name";
+          name.textContent = s.name;
+          const reason = document.createElement("div");
+          reason.className = "prs-row-meta";
+          reason.textContent = s.reason || s.status_text;
+          left.appendChild(name);
+          left.appendChild(reason);
+
+          const right = document.createElement("div");
+          right.className = "prs-row-right";
+
+          const pill = document.createElement("span");
+          pill.className = `prs-pill ${s.waiting_for_away ? "wait" : s.is_present ? "home" : "away"}`;
+          pill.textContent = s.waiting_for_away
+            ? `⏳ ${s.away_in_min}m`
+            : s.is_present
+            ? "Zuhause"
+            : "Abwesend";
+          right.appendChild(pill);
+
+          row.appendChild(left);
+          row.appendChild(right);
+          listEl.appendChild(row);
+        });
+      }
+    }
+  }
+
+  _renderShell() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        ha-card { padding: 12px 14px; color: var(--primary-text-color); }
+        .prs-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        .prs-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+        .prs-icon { width: 38px; height: 38px; border-radius: 10px; background: var(--secondary-background-color); display: flex; align-items: center; justify-content: center; font-size: 19px; flex-shrink: 0; }
+        .prs-titles { min-width: 0; flex: 1; }
+        .prs-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .prs-sub { font-size: 11px; color: var(--secondary-text-color); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .prs-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+        .prs-cfg { background: var(--secondary-background-color); border: 1px solid var(--divider-color); color: var(--primary-text-color); cursor: pointer; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+        .prs-cfg:hover { border-color: var(--primary-color); }
+        .prs-badge { font-size: 11px; font-weight: 700; padding: 5px 10px; border-radius: 999px; }
+        .prs-badge.home { background: rgba(76, 175, 80, 0.16); color: var(--success-color, #4caf50); }
+        .prs-badge.away { background: var(--secondary-background-color); color: var(--secondary-text-color); }
+        .prs-list { margin-top: 10px; border-top: 1px solid var(--divider-color); padding-top: 6px; max-height: 260px; overflow-y: auto; }
+        .prs-empty { font-size: 12px; color: var(--secondary-text-color); text-align: center; padding: 10px 4px; }
+        .prs-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 4px; border-bottom: 1px solid var(--divider-color); }
+        .prs-row:last-child { border-bottom: none; }
+        .prs-row-left { min-width: 0; flex: 1; }
+        .prs-row-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .prs-row-meta { font-size: 11px; color: var(--secondary-text-color); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .prs-row-right { flex-shrink: 0; }
+        .prs-pill { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; }
+        .prs-pill.home { color: var(--success-color, #4caf50); background: rgba(76, 175, 80, 0.16); }
+        .prs-pill.wait { color: var(--warning-color, #ff9800); background: rgba(255, 152, 0, 0.16); }
+        .prs-pill.away { color: var(--secondary-text-color); background: var(--secondary-background-color); }
+      </style>
+      <ha-card>
+        <div class="prs-head">
+          <div class="prs-left">
+            <div class="prs-icon">👤</div>
+            <div class="prs-titles">
+              <div id="prs-title" class="prs-title">Anwesenheit</div>
+              <div id="prs-sub" class="prs-sub"></div>
+            </div>
+          </div>
+          <div class="prs-actions">
+            <button id="prs-cfg" class="prs-cfg" type="button" title="Anwesenheitssensoren verwalten">⚙️</button>
+            <span id="prs-badge" class="prs-badge away">Leer</span>
+          </div>
+        </div>
+        <div id="prs-list" class="prs-list"></div>
+      </ha-card>
+    `;
+
+    this.shadowRoot.getElementById("prs-cfg").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      if (window.__wvOpenPresenceSensorsConfigDialog) {
+        window.__wvOpenPresenceSensorsConfigDialog(this._hass);
+      }
+    });
+  }
+}
+
+if (!customElements.get("wohnsinnig-vernetzt-presence-sensors-card")) {
+  customElements.define(
+    "wohnsinnig-vernetzt-presence-sensors-card",
+    WohnsinnigVernetztPresenceSensorsCard
+  );
+}
+if (!window.customCards.some((c) => c.type === "wohnsinnig-vernetzt-presence-sensors-card")) {
+  window.customCards.push({
+    type: "wohnsinnig-vernetzt-presence-sensors-card",
+    name: "Wohnsinnig vernetzt Anwesenheitssensoren",
+    description: "Zeigt kombinierte Anwesenheitssensoren (Standort + WLAN + Bewegung) für Personen & Alarmanlage.",
+  });
+}
+
+class WohnsinnigVernetztPresenceSensorsConfigDialog extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._hass = null;
+    this._loading = true;
+    this._saving = false;
+    this._error = "";
+    this._savedMsg = "";
+    this._sensors = [];
+    this._cands = {
+      location_candidates: [],
+      wifi_candidates: [],
+      motion_candidates: [],
+      extra_candidates: [],
+      detected_ssids: [],
+    };
+    this._editingIndex = null;
+    this._draft = null;
+    this._search = { loc: "", wifi: "", motion: "", extra: "" };
+  }
+
+  open(hass) {
+    this._hass = hass;
+    this._loading = true;
+    this._saving = false;
+    this._error = "";
+    this._savedMsg = "";
+    this._editingIndex = null;
+    this._draft = null;
+    this._search = { loc: "", wifi: "", motion: "", extra: "" };
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    const nativeDlg = this.shadowRoot.getElementById("psd-native");
+    this.style.display = "block";
+    if (nativeDlg) {
+      if (typeof nativeDlg.showModal === "function") {
+        if (!nativeDlg.open) {
+          try {
+            nativeDlg.showModal();
+          } catch (_) {
+            nativeDlg.setAttribute("open", "");
+          }
+        }
+      } else {
+        nativeDlg.setAttribute("open", "");
+      }
+    }
+    this._renderBody();
+    this._loadConfig();
+  }
+
+  close() {
+    const nativeDlg = this.shadowRoot && this.shadowRoot.getElementById("psd-native");
+    if (nativeDlg) {
+      if (typeof nativeDlg.close === "function" && nativeDlg.open) {
+        try {
+          nativeDlg.close();
+        } catch (_) {
+          nativeDlg.removeAttribute("open");
+        }
+      } else {
+        nativeDlg.removeAttribute("open");
+      }
+    }
+    this.style.display = "none";
+  }
+
+  async _loadConfig() {
+    if (!this._hass) return;
+    try {
+      const data = await this._hass.callApi("GET", "wohnsinnig_vernetzt/presence_sensors_config");
+      this._sensors = Array.isArray(data.presence_sensors)
+        ? data.presence_sensors.map((s) => ({
+            ...s,
+            location_entities: [...(s.location_entities || [])],
+            wifi_entities: [...(s.wifi_entities || [])],
+            home_wifi_ssids: [...(s.home_wifi_ssids || [])],
+            motion_entities: [...(s.motion_entities || [])],
+            extra_entities: [...(s.extra_entities || [])],
+          }))
+        : [];
+      this._cands = {
+        location_candidates: data.location_candidates || [],
+        wifi_candidates: data.wifi_candidates || [],
+        motion_candidates: data.motion_candidates || [],
+        extra_candidates: data.extra_candidates || [],
+        detected_ssids: data.detected_ssids || [],
+      };
+      this._loading = false;
+      this._error = "";
+      this._renderBody();
+    } catch (err) {
+      this._loading = false;
+      this._error = err?.body?.error || err?.message || "Sensoren konnten nicht geladen werden.";
+      this._renderBody();
+    }
+  }
+
+  async _saveConfig() {
+    if (!this._hass || this._saving) return;
+    if (this._editingIndex !== null && this._draft) {
+      if (!this._commitDraft()) return;
+    }
+
+    this._saving = true;
+    this._error = "";
+    this._savedMsg = "";
+    this._updateFooter();
+
+    try {
+      await this._hass.callApi("POST", "wohnsinnig_vernetzt/presence_sensors_config", {
+        presence_sensors: this._sensors,
+      });
+      this._saving = false;
+      this._savedMsg = "Gespeichert! Neue binary_sensor-Entitäten werden jetzt angelegt…";
+      this._updateFooter();
+      setTimeout(() => this.close(), 950);
+    } catch (err) {
+      this._saving = false;
+      this._error = err?.body?.error || err?.message || "Speichern fehlgeschlagen.";
+      this._updateFooter();
+    }
+  }
+
+  _startNew(preset) {
+    const defaultSsids = this._cands.detected_ssids.slice(0, 2);
+    const draft = {
+      id: `ps_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+      name: preset === "alarm" ? "Haus Anwesenheit (Alarm)" : preset === "wife" ? "Frau" : preset === "child" ? "Kind" : "Patrick",
+      enabled: true,
+      combine_mode: "any_present",
+      location_entities: [],
+      wifi_entities: [],
+      home_wifi_ssids: defaultSsids,
+      motion_entities: [],
+      motion_timeout_minutes: preset === "alarm" ? 20 : 15,
+      extra_entities: [],
+      away_delay_minutes: preset === "alarm" ? 3 : 2,
+      include_in_anyone_home: preset !== "alarm",
+    };
+    this._editingIndex = -1;
+    this._draft = draft;
+    this._search = { loc: "", wifi: "", motion: "", extra: "" };
+    this._error = "";
+    this._renderBody();
+  }
+
+  _startEdit(idx) {
+    if (idx < 0 || idx >= this._sensors.length) return;
+    const s = this._sensors[idx];
+    this._editingIndex = idx;
+    this._draft = {
+      ...s,
+      location_entities: [...(s.location_entities || [])],
+      wifi_entities: [...(s.wifi_entities || [])],
+      home_wifi_ssids: [...(s.home_wifi_ssids || [])],
+      motion_entities: [...(s.motion_entities || [])],
+      extra_entities: [...(s.extra_entities || [])],
+    };
+    this._search = { loc: "", wifi: "", motion: "", extra: "" };
+    this._error = "";
+    this._renderBody();
+  }
+
+  _commitDraft() {
+    if (!this._draft) return true;
+    const d = this._draft;
+    if (!d.name || !d.name.trim()) {
+      this._error = "Bitte einen Namen (z. B. Patrick, Frau oder Kind) eingeben.";
+      this._updateFooter();
+      return false;
+    }
+    const totalSources =
+      (d.location_entities?.length || 0) +
+      (d.wifi_entities?.length || 0) +
+      (d.motion_entities?.length || 0) +
+      (d.extra_entities?.length || 0);
+    if (totalSources === 0) {
+      this._error = "Bitte mindestens eine Quelle (Standort, WLAN, Bewegungsmelder oder Zusatz) auswählen.";
+      this._updateFooter();
+      return false;
+    }
+    const clean = { ...d, name: d.name.trim() };
+    if (this._editingIndex === -1) {
+      this._sensors.push(clean);
+    } else if (this._editingIndex >= 0 && this._editingIndex < this._sensors.length) {
+      this._sensors[this._editingIndex] = clean;
+    }
+    this._editingIndex = null;
+    this._draft = null;
+    this._error = "";
+    this._renderBody();
+    return true;
+  }
+
+  _renderListView() {
+    const wrap = this.shadowRoot.getElementById("psd-list");
+    const cnt = this.shadowRoot.getElementById("psd-count");
+    if (cnt) cnt.textContent = `${this._sensors.length} angelegt`;
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    if (!this._sensors.length) {
+      const empty = document.createElement("div");
+      empty.className = "dlg-empty";
+      empty.textContent = "Noch keine Anwesenheitssensoren angelegt. Starte einfach über eine der Vorlagen oben!";
+      wrap.appendChild(empty);
+      return;
+    }
+
+    this._sensors.forEach((s, idx) => {
+      const card = document.createElement("div");
+      card.className = "sensor-item";
+
+      const info = document.createElement("div");
+      info.className = "sensor-info";
+      const name = document.createElement("div");
+      name.className = "sensor-name";
+      name.textContent = s.name;
+
+      const parts = [];
+      if (s.location_entities?.length) parts.push(`📍 ${s.location_entities.length} Standort`);
+      if (s.wifi_entities?.length) parts.push(`📶 ${s.wifi_entities.length} WLAN`);
+      if (s.motion_entities?.length) parts.push(`🏃 ${s.motion_entities.length} Bew. (${s.motion_timeout_minutes}m)`);
+      if (s.extra_entities?.length) parts.push(`⚡ ${s.extra_entities.length} Extra`);
+
+      const meta = document.createElement("div");
+      meta.className = "sensor-meta";
+      meta.textContent = parts.join(" • ") || "Keine Quellen";
+      info.appendChild(name);
+      info.appendChild(meta);
+
+      const ctrls = document.createElement("div");
+      ctrls.className = "sensor-ctrls";
+
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "mini-btn";
+      editBtn.title = "Bearbeiten";
+      editBtn.textContent = "✏️";
+      editBtn.addEventListener("click", () => this._startEdit(idx));
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "mini-btn danger";
+      delBtn.title = "Löschen";
+      delBtn.textContent = "🗑️";
+      delBtn.addEventListener("click", () => {
+        this._sensors.splice(idx, 1);
+        this._renderListView();
+      });
+
+      ctrls.appendChild(editBtn);
+      ctrls.appendChild(delBtn);
+      card.appendChild(info);
+      card.appendChild(ctrls);
+      wrap.appendChild(card);
+    });
+  }
+
+  _renderChecklist(containerId, countId, candidates, selectedArr, queryStr, onToggle) {
+    const wrap = this.shadowRoot.getElementById(containerId);
+    const cnt = this.shadowRoot.getElementById(countId);
+    const selSet = new Set(selectedArr || []);
+    if (cnt) cnt.textContent = `${selSet.size} gewählt`;
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    const q = (queryStr || "").trim().toLowerCase();
+    const sorted = [...candidates].sort((a, b) => {
+      const as = selSet.has(a.entity_id) ? 0 : 1;
+      const bs = selSet.has(b.entity_id) ? 0 : 1;
+      if (as !== bs) return as - bs;
+      return (a.tier ?? 1) - (b.tier ?? 1) || a.name.localeCompare(b.name, "de");
+    });
+
+    const filtered = sorted.filter(
+      (i) => !q || i.name.toLowerCase().includes(q) || i.entity_id.toLowerCase().includes(q)
+    );
+
+    if (!filtered.length) {
+      const empty = document.createElement("div");
+      empty.className = "dlg-empty";
+      empty.textContent = "Keine passende Entität gefunden.";
+      wrap.appendChild(empty);
+      return;
+    }
+
+    filtered.slice(0, 80).forEach((item) => {
+      const label = document.createElement("label");
+      const checked = selSet.has(item.entity_id);
+      label.className = `chk-row ${checked ? "selected" : ""}`;
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = checked;
+      cb.addEventListener("change", () => {
+        onToggle(item.entity_id, cb.checked);
+        label.classList.toggle("selected", cb.checked);
+      });
+
+      const txt = document.createElement("div");
+      txt.className = "chk-txt";
+      const n = document.createElement("div");
+      n.className = "chk-name";
+      n.textContent = item.name;
+      const sub = document.createElement("div");
+      sub.className = "chk-sub";
+      sub.textContent = `${item.entity_id} (${item.state})`;
+      txt.appendChild(n);
+      txt.appendChild(sub);
+
+      label.appendChild(cb);
+      label.appendChild(txt);
+      wrap.appendChild(label);
+    });
+  }
+
+  _renderSsidChips() {
+    const wrap = this.shadowRoot.getElementById("psd-ssid-chips");
+    if (!wrap || !this._draft) return;
+    wrap.innerHTML = "";
+    const detected = this._cands.detected_ssids || [];
+    if (!detected.length) {
+      wrap.style.display = "none";
+      return;
+    }
+    wrap.style.display = "flex";
+    detected.forEach((ssid) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ssid-chip";
+      btn.textContent = `+ ${ssid}`;
+      btn.addEventListener("click", () => {
+        if (!this._draft) return;
+        const cur = this._draft.home_wifi_ssids || [];
+        if (!cur.some((s) => s.toLowerCase() === ssid.toLowerCase())) {
+          this._draft.home_wifi_ssids = [...cur, ssid];
+          this.shadowRoot.getElementById("psd-ssids").value =
+            this._draft.home_wifi_ssids.join(", ");
+        }
+      });
+      wrap.appendChild(btn);
+    });
+  }
+
+  _renderEditorView() {
+    const d = this._draft;
+    if (!d) return;
+
+    this.shadowRoot.getElementById("psd-ed-title").textContent =
+      this._editingIndex === -1
+        ? "➕ Neuen Anwesenheitssensor anlegen"
+        : `✏️ Sensor bearbeiten: ${d.name}`;
+    this.shadowRoot.getElementById("psd-name").value = d.name || "";
+    this.shadowRoot.getElementById("psd-ssids").value = (d.home_wifi_ssids || []).join(", ");
+    this.shadowRoot.getElementById("psd-mtimeout").value = String(d.motion_timeout_minutes ?? 15);
+    this.shadowRoot.getElementById("psd-mode").value = d.combine_mode || "any_present";
+    this.shadowRoot.getElementById("psd-delay").value = String(d.away_delay_minutes ?? 2);
+    this.shadowRoot.getElementById("psd-include").checked = d.include_in_anyone_home !== false;
+
+    const makeToggle = (fieldKey, countId) => (eid, isChecked) => {
+      if (!this._draft) return;
+      const set = new Set(this._draft[fieldKey] || []);
+      if (isChecked) set.add(eid);
+      else set.delete(eid);
+      this._draft[fieldKey] = Array.from(set);
+      const cnt = this.shadowRoot.getElementById(countId);
+      if (cnt) cnt.textContent = `${set.size} gewählt`;
+    };
+
+    this._renderChecklist(
+      "psd-loc-list",
+      "psd-loc-cnt",
+      this._cands.location_candidates,
+      d.location_entities,
+      this._search.loc,
+      makeToggle("location_entities", "psd-loc-cnt")
+    );
+    this._renderChecklist(
+      "psd-wifi-list",
+      "psd-wifi-cnt",
+      this._cands.wifi_candidates,
+      d.wifi_entities,
+      this._search.wifi,
+      makeToggle("wifi_entities", "psd-wifi-cnt")
+    );
+    this._renderChecklist(
+      "psd-motion-list",
+      "psd-motion-cnt",
+      this._cands.motion_candidates,
+      d.motion_entities,
+      this._search.motion,
+      makeToggle("motion_entities", "psd-motion-cnt")
+    );
+    this._renderChecklist(
+      "psd-extra-list",
+      "psd-extra-cnt",
+      this._cands.extra_candidates,
+      d.extra_entities,
+      this._search.extra,
+      makeToggle("extra_entities", "psd-extra-cnt")
+    );
+    this._renderSsidChips();
+  }
+
+  _renderBody() {
+    const loadingEl = this.shadowRoot.getElementById("psd-loading");
+    const mainEl = this.shadowRoot.getElementById("psd-main");
+    const editorEl = this.shadowRoot.getElementById("psd-editor");
+
+    if (loadingEl) loadingEl.style.display = this._loading ? "block" : "none";
+    if (!this._loading) {
+      const isEditing = this._editingIndex !== null && this._draft !== null;
+      if (mainEl) mainEl.style.display = isEditing ? "none" : "block";
+      if (editorEl) editorEl.style.display = isEditing ? "block" : "none";
+      if (isEditing) this._renderEditorView();
+      else this._renderListView();
+    }
+    this._updateFooter();
+  }
+
+  _updateFooter() {
+    const statusEl = this.shadowRoot.getElementById("psd-status");
+    const saveBtn = this.shadowRoot.getElementById("psd-save");
+    if (statusEl) {
+      if (this._error) {
+        statusEl.textContent = this._error;
+        statusEl.className = "dlg-status error";
+        statusEl.style.display = "block";
+      } else if (this._savedMsg) {
+        statusEl.textContent = this._savedMsg;
+        statusEl.className = "dlg-status ok";
+        statusEl.style.display = "block";
+      } else {
+        statusEl.style.display = "none";
+      }
+    }
+    if (saveBtn) {
+      saveBtn.disabled = this._loading || this._saving;
+      saveBtn.textContent = this._saving ? "Speichert…" : "Speichern";
+    }
+  }
+
+  _renderShell() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host { display: none; font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif); }
+        dialog#psd-native { padding: 0; border: none; background: transparent; max-width: min(560px, calc(100vw - 24px)); width: 100%; max-height: 90vh; overflow: visible; color: var(--primary-text-color, #e1e1e1); }
+        dialog#psd-native::backdrop { background: rgba(0, 0, 0, 0.62); }
+        .modal { width: 100%; max-height: 90vh; background: var(--card-background-color, #1c1c1c); color: var(--primary-text-color, #e1e1e1); border-radius: 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); border: 1px solid var(--divider-color, rgba(255,255,255,0.12)); display: flex; flex-direction: column; overflow: hidden; }
+        .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 18px; border-bottom: 1px solid var(--divider-color); }
+        .modal-title { font-size: 16px; font-weight: 600; }
+        .close-btn { background: none; border: none; color: var(--secondary-text-color); font-size: 18px; cursor: pointer; padding: 4px 8px; border-radius: 8px; }
+        .modal-body { padding: 14px 18px; overflow-y: auto; flex: 1; }
+        .dlg-loading { text-align: center; padding: 28px 8px; color: var(--secondary-text-color); font-size: 13px; }
+        .hint { font-size: 12px; color: var(--secondary-text-color); margin-bottom: 10px; line-height: 1.4; }
+        .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+        .section-label { font-size: 13px; font-weight: 600; }
+        .section-count { font-size: 11px; color: var(--primary-color, #03a9f4); font-weight: 600; }
+        .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+        .preset-btn { border: 1px solid var(--divider-color); background: var(--secondary-background-color); color: var(--primary-text-color); border-radius: 999px; padding: 5px 10px; font-family: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+        .preset-btn:hover { border-color: var(--primary-color); color: var(--primary-color); }
+        .preset-btn.add { background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.14); border-color: rgba(var(--rgb-primary-color, 3, 169, 244), 0.45); color: var(--primary-color, #03a9f4); }
+        .sensor-list { display: flex; flex-direction: column; gap: 6px; }
+        .sensor-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--divider-color); background: var(--secondary-background-color); }
+        .sensor-info { min-width: 0; flex: 1; }
+        .sensor-name { font-size: 13px; font-weight: 600; }
+        .sensor-meta { font-size: 11px; color: var(--secondary-text-color); margin-top: 2px; }
+        .sensor-ctrls { display: flex; gap: 4px; flex-shrink: 0; }
+        .mini-btn { background: var(--card-background-color); border: 1px solid var(--divider-color); color: var(--primary-text-color); border-radius: 6px; width: 28px; height: 28px; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+        .mini-btn.danger:hover { border-color: var(--error-color, #db4437); color: var(--error-color, #db4437); }
+        .ed-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+        .box { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--divider-color); background: var(--secondary-background-color, rgba(255,255,255,0.03)); margin-bottom: 10px; }
+        .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+        .field label { font-size: 11px; color: var(--secondary-text-color); font-weight: 600; }
+        .field input, .field select { padding: 7px 9px; border-radius: 8px; border: 1px solid var(--divider-color); background: var(--card-background-color); color: var(--primary-text-color); font-family: inherit; font-size: 13px; width: 100%; box-sizing: border-box; }
+        .search { width: 100%; box-sizing: border-box; padding: 6px 9px; border-radius: 8px; border: 1px solid var(--divider-color); background: var(--card-background-color); color: var(--primary-text-color); font-family: inherit; font-size: 12px; margin-bottom: 5px; }
+        .chk-list { max-height: 125px; overflow-y: auto; border: 1px solid var(--divider-color); border-radius: 8px; padding: 3px; background: var(--card-background-color); }
+        .chk-row { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 6px; cursor: pointer; }
+        .chk-row.selected { background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.14); }
+        .chk-txt { min-width: 0; flex: 1; }
+        .chk-name { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .chk-sub { font-size: 10px; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ssid-chips { display: none; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+        .ssid-chip { border: 1px solid rgba(var(--rgb-primary-color, 3, 169, 244), 0.45); background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.12); color: var(--primary-color, #03a9f4); border-radius: 999px; padding: 2px 8px; font-size: 11px; cursor: pointer; font-family: inherit; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .inline-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border-radius: 8px; background: var(--secondary-background-color); margin-bottom: 8px; }
+        .inline-row label { font-size: 12px; cursor: pointer; }
+        .dlg-empty { font-size: 12px; color: var(--secondary-text-color); text-align: center; padding: 10px 6px; }
+        .ed-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+        .dlg-status { display: none; margin: 0 18px 10px; padding: 8px 10px; border-radius: 8px; font-size: 12px; }
+        .dlg-status.ok { color: var(--success-color, #4caf50); background: rgba(76, 175, 80, 0.14); }
+        .dlg-status.error { color: var(--error-color, #db4437); background: rgba(219, 68, 55, 0.14); }
+        .modal-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--divider-color); }
+        .foot-link { font-size: 12px; color: var(--primary-color, #03a9f4); text-decoration: none; }
+        .foot-btns { display: flex; gap: 8px; }
+        .btn { border: none; border-radius: 8px; padding: 8px 14px; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+        .btn.secondary { background: var(--secondary-background-color); color: var(--primary-text-color); }
+        .btn.primary { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
+        .btn:disabled { opacity: 0.55; cursor: default; }
+      </style>
+      <dialog id="psd-native">
+        <div class="modal" role="document">
+          <div class="modal-head">
+            <div class="modal-title">👤 Kombinierte Anwesenheitssensoren</div>
+            <button id="psd-close" class="close-btn" type="button" aria-label="Schließen">✕</button>
+          </div>
+
+          <div class="modal-body">
+            <div id="psd-loading" class="dlg-loading">Lade Personen, WLAN-Sensoren & Bewegungsmelder…</div>
+
+            <div id="psd-main" style="display:none;">
+              <div class="hint">
+                Jeder hier angelegte Sensor wird als eigene <b>binary_sensor</b>-Entität (Zuhause / Abwesend) erstellt – nutzbar in jeder Automation (z. B. Alarmanlage). Zusätzlich gibt es automatisch den Sammel-Sensor <b>Jemand zuhause</b>.
+              </div>
+              <div class="section-head">
+                <span class="section-label">Angelegte Anwesenheitssensoren</span>
+                <span id="psd-count" class="section-count">0 angelegt</span>
+              </div>
+              <div class="presets">
+                <button id="psd-add-person" class="preset-btn add" type="button">➕ Neue Person</button>
+                <button id="psd-add-wife" class="preset-btn" type="button">👩 Frau</button>
+                <button id="psd-add-child" class="preset-btn" type="button">🧒 Kind</button>
+                <button id="psd-add-alarm" class="preset-btn" type="button">🔒 Haus / Alarm</button>
+              </div>
+              <div id="psd-list" class="sensor-list"></div>
+            </div>
+
+            <div id="psd-editor" style="display:none;">
+              <div class="ed-bar">
+                <span id="psd-ed-title" class="section-label">Neuer Sensor</span>
+                <button id="psd-ed-back" class="btn secondary" type="button" style="padding:5px 10px;font-size:12px;">← Zurück</button>
+              </div>
+
+              <div class="field">
+                <label for="psd-name">Name des Sensors (wird als Entitätsname verwendet)</label>
+                <input id="psd-name" type="text" placeholder="z. B. Patrick, Frau, Kind oder Alarmanlage" />
+              </div>
+
+              <div class="box">
+                <div class="section-head">
+                  <span class="section-label">1. 📍 Standort / Handy (GPS / Person)</span>
+                  <span id="psd-loc-cnt" class="section-count">0 gewählt</span>
+                </div>
+                <input id="psd-loc-search" class="search" type="search" placeholder="Person oder Handy-Tracker suchen…" />
+                <div id="psd-loc-list" class="chk-list"></div>
+              </div>
+
+              <div class="box">
+                <div class="section-head">
+                  <span class="section-label">2. 📶 WLAN / Netzwerk (Router oder Handy-WLAN)</span>
+                  <span id="psd-wifi-cnt" class="section-count">0 gewählt</span>
+                </div>
+                <input id="psd-wifi-search" class="search" type="search" placeholder="WLAN-Sensor oder Router-Tracker suchen…" />
+                <div id="psd-wifi-list" class="chk-list"></div>
+                <div class="field" style="margin-top:8px;margin-bottom:0;">
+                  <label for="psd-ssids">Heim-WLAN-Namen / SSIDs (kommagetrennt, für Handy-WLAN-Sensoren)</label>
+                  <input id="psd-ssids" type="text" placeholder="z. B. MeinWLAN, MeinWLAN_5G" />
+                  <div id="psd-ssid-chips" class="ssid-chips"></div>
+                </div>
+              </div>
+
+              <div class="box">
+                <div class="section-head">
+                  <span class="section-label">3. 🏃 Bewegungsmelder / Präsenzmelder</span>
+                  <span id="psd-motion-cnt" class="section-count">0 gewählt</span>
+                </div>
+                <input id="psd-motion-search" class="search" type="search" placeholder="Bewegungsmelder suchen…" />
+                <div id="psd-motion-list" class="chk-list"></div>
+                <div class="field" style="margin-top:8px;margin-bottom:0;">
+                  <label for="psd-mtimeout">Keine Bewegung seit (Minuten, danach erst „Abwesend“)</label>
+                  <input id="psd-mtimeout" type="number" min="0" max="240" value="15" />
+                </div>
+              </div>
+
+              <details class="box">
+                <summary style="cursor:pointer;font-size:12px;font-weight:600;margin-bottom:6px;">
+                  4. ⚡ Optionale Zusatz-Sensoren (<span id="psd-extra-cnt">0 gewählt</span>)
+                </summary>
+                <input id="psd-extra-search" class="search" type="search" placeholder="Schalter, Helfer oder Tracker suchen…" />
+                <div id="psd-extra-list" class="chk-list"></div>
+              </details>
+
+              <div class="grid-2">
+                <div class="field">
+                  <label for="psd-mode">Kombinations-Logik</label>
+                  <select id="psd-mode">
+                    <option value="any_present">Sicher (Alarm): Abwesend erst wenn ALLE weg</option>
+                    <option value="all_present">Strikt: Zuhause nur wenn ALLE aktiv</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="psd-delay">Abwesend-Verzögerung (Min)</label>
+                  <input id="psd-delay" type="number" min="0" max="120" value="2" />
+                </div>
+              </div>
+
+              <div class="inline-row">
+                <label for="psd-include">In Sammel-Sensor „Jemand zuhause“ einbeziehen</label>
+                <input id="psd-include" type="checkbox" checked />
+              </div>
+
+              <div class="ed-actions">
+                <button id="psd-ed-cancel" class="btn secondary" type="button">Verwerfen</button>
+                <button id="psd-ed-ok" class="btn primary" type="button">Sensor übernehmen</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="psd-status" class="dlg-status"></div>
+
+          <div class="modal-foot">
+            <a id="psd-ext-link" class="foot-link" href="/config/integrations/integration/wohnsinnig_vernetzt">Alle Optionen ↗</a>
+            <div class="foot-btns">
+              <button id="psd-cancel" class="btn secondary" type="button">Abbrechen</button>
+              <button id="psd-save" class="btn primary" type="button">Speichern</button>
+            </div>
+          </div>
+        </div>
+      </dialog>
+    `;
+
+    const nativeDlg = this.shadowRoot.getElementById("psd-native");
+    nativeDlg.addEventListener("click", (ev) => {
+      if (ev.target === nativeDlg) this.close();
+    });
+    nativeDlg.addEventListener("close", () => {
+      this.style.display = "none";
+    });
+    this.shadowRoot.getElementById("psd-close").addEventListener("click", () => this.close());
+    this.shadowRoot.getElementById("psd-cancel").addEventListener("click", () => this.close());
+    this.shadowRoot.getElementById("psd-ext-link").addEventListener("click", () => this.close());
+    this.shadowRoot.getElementById("psd-save").addEventListener("click", () => this._saveConfig());
+
+    this.shadowRoot.getElementById("psd-add-person").addEventListener("click", () => this._startNew("person"));
+    this.shadowRoot.getElementById("psd-add-wife").addEventListener("click", () => this._startNew("wife"));
+    this.shadowRoot.getElementById("psd-add-child").addEventListener("click", () => this._startNew("child"));
+    this.shadowRoot.getElementById("psd-add-alarm").addEventListener("click", () => this._startNew("alarm"));
+
+    const closeEd = () => {
+      this._editingIndex = null;
+      this._draft = null;
+      this._error = "";
+      this._renderBody();
+    };
+    this.shadowRoot.getElementById("psd-ed-back").addEventListener("click", closeEd);
+    this.shadowRoot.getElementById("psd-ed-cancel").addEventListener("click", closeEd);
+    this.shadowRoot.getElementById("psd-ed-ok").addEventListener("click", () => this._commitDraft());
+
+    this.shadowRoot.getElementById("psd-name").addEventListener("input", (ev) => {
+      if (this._draft) this._draft.name = ev.target.value;
+    });
+    this.shadowRoot.getElementById("psd-ssids").addEventListener("input", (ev) => {
+      if (this._draft) {
+        this._draft.home_wifi_ssids = (ev.target.value || "")
+          .split(/[,;\n]+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+    });
+    this.shadowRoot.getElementById("psd-mtimeout").addEventListener("change", (ev) => {
+      if (this._draft) {
+        this._draft.motion_timeout_minutes = Math.max(0, Math.min(240, parseInt(ev.target.value, 10) || 0));
+      }
+    });
+    this.shadowRoot.getElementById("psd-mode").addEventListener("change", (ev) => {
+      if (this._draft) this._draft.combine_mode = ev.target.value;
+    });
+    this.shadowRoot.getElementById("psd-delay").addEventListener("change", (ev) => {
+      if (this._draft) {
+        this._draft.away_delay_minutes = Math.max(0, Math.min(120, parseInt(ev.target.value, 10) || 0));
+      }
+    });
+    this.shadowRoot.getElementById("psd-include").addEventListener("change", (ev) => {
+      if (this._draft) this._draft.include_in_anyone_home = Boolean(ev.target.checked);
+    });
+
+    this.shadowRoot.getElementById("psd-loc-search").addEventListener("input", (ev) => {
+      this._search.loc = ev.target.value || "";
+      this._renderEditorView();
+    });
+    this.shadowRoot.getElementById("psd-wifi-search").addEventListener("input", (ev) => {
+      this._search.wifi = ev.target.value || "";
+      this._renderEditorView();
+    });
+    this.shadowRoot.getElementById("psd-motion-search").addEventListener("input", (ev) => {
+      this._search.motion = ev.target.value || "";
+      this._renderEditorView();
+    });
+    this.shadowRoot.getElementById("psd-extra-search").addEventListener("input", (ev) => {
+      this._search.extra = ev.target.value || "";
+      this._renderEditorView();
+    });
+  }
+}
+
+if (!customElements.get("wohnsinnig-vernetzt-presence-sensors-config-dialog")) {
+  customElements.define(
+    "wohnsinnig-vernetzt-presence-sensors-config-dialog",
+    WohnsinnigVernetztPresenceSensorsConfigDialog
+  );
+}
+
+window.__wvLastPsOpenTs = 0;
+window.__wvOpenPresenceSensorsConfigDialog = function (hass) {
+  const now = Date.now();
+  if (now - (window.__wvLastPsOpenTs || 0) < 1200) return;
+  const activeHass = hass || document.querySelector("home-assistant")?.hass;
+  if (!activeHass) return;
+  window.__wvLastPsOpenTs = now;
+  let dlg = document.getElementById("wv-presence-sensors-config-dialog");
+  if (!dlg) {
+    dlg = document.createElement("wohnsinnig-vernetzt-presence-sensors-config-dialog");
+    dlg.id = "wv-presence-sensors-config-dialog";
+    document.body.appendChild(dlg);
+  }
+  dlg.open(activeHass);
+};
+
+// Doppelte Event- & State-Bridge für Anwesenheitssimulation, Wake-Up Light, PV-Überschuss & Anwesenheitssensoren
+if (!window.__wvConfigBridgeV5Initialized) {
+  window.__wvConfigBridgeV5Initialized = true;
   let subscribedConn = null;
   const seenReqBySection = {};
   const seenStateTsBySection = {};
@@ -5058,6 +5986,8 @@ if (!window.__wvConfigBridgeV4Initialized) {
       window.__wvOpenWakeUpConfigDialog(hass);
     } else if (section === "pv") {
       window.__wvOpenPvConfigDialog(hass);
+    } else if (section === "presence_sensors") {
+      window.__wvOpenPresenceSensorsConfigDialog(hass);
     }
   };
 
