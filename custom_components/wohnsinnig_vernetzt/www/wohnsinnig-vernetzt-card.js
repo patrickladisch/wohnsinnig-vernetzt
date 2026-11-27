@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.4.0
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.4.1
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {

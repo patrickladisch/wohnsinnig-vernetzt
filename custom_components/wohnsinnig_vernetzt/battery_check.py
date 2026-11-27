@@ -350,3 +350,67 @@ def run_battery_check(
         "excluded_devices": excluded_devices,
         "all_battery_levels": all_battery_levels,
     }
+
+
+def get_battery_exclusion_lists(
+    hass: HomeAssistant,
+    excluded_keys: list[str] | set[str] | None = None,
+    battery_threshold: int = 15,
+) -> tuple[list[dict], list[dict]]:
+    """Liefert (aktive_geraete, ausgeschlossene_geraete) für die Geräte-Konfigurations-Dropdowns.
+
+    Aktive Geräte unter dem Schwellwert stehen zuerst, danach alphabetisch sortiert.
+    """
+    all_candidates = _collect_all_battery_candidates(hass)
+    excluded_list = normalize_battery_exclusions(list(excluded_keys or []))
+    excluded_set = set(excluded_list)
+
+    active_devices: list[dict] = []
+    excluded_devices: list[dict] = []
+    matched_excluded_keys: set[str] = set()
+
+    for item in all_candidates.values():
+        entry = {
+            "dedup_key": item["dedup_key"],
+            "name": item["name"],
+            "entity_id": item["entity_id"],
+            "level": item["level"],
+            "raw_level": item["raw_level"],
+            "level_formatted": item["level_formatted"],
+            "is_low": item["raw_level"] is not None and item["raw_level"] < battery_threshold,
+        }
+        if _is_excluded(item, excluded_set):
+            matched_excluded_keys.add(item["dedup_key"])
+            matched_excluded_keys.add(item["entity_id"])
+            matched_excluded_keys.add(f"ent:{item['entity_id']}")
+            if item.get("device_id"):
+                matched_excluded_keys.add(item["device_id"])
+                matched_excluded_keys.add(f"dev:{item['device_id']}")
+            excluded_devices.append(entry)
+        else:
+            active_devices.append(entry)
+
+    for key in excluded_list:
+        if key not in matched_excluded_keys:
+            excluded_devices.append(
+                {
+                    "dedup_key": key,
+                    "name": _resolve_excluded_display_name(hass, key),
+                    "entity_id": key[4:] if key.startswith("ent:") else "",
+                    "level": None,
+                    "raw_level": None,
+                    "level_formatted": "—",
+                    "is_low": False,
+                }
+            )
+
+    # Schwache Batterien zuerst (niedrigste zuerst), danach übrige alphabetisch
+    active_devices.sort(
+        key=lambda d: (
+            0 if d["is_low"] else 1,
+            d["raw_level"] if (d["is_low"] and d["raw_level"] is not None) else 999.0,
+            d["name"].lower(),
+        )
+    )
+    excluded_devices.sort(key=lambda d: d["name"].lower())
+    return active_devices, excluded_devices

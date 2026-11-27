@@ -21,6 +21,7 @@ from .const import (
 from .coordinator import WohnsinnigVernetztCoordinator
 from .entity import WohnsinnigVernetztEntity
 from .media_player import get_available_targets
+from .battery_check import get_battery_exclusion_lists
 from .notify_helpers import get_notify_choices
 
 MAX_SELECT_LABEL_LEN = 28
@@ -77,6 +78,8 @@ async def async_setup_entry(
             WohnsinnigVernetztBatteryListSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztSilentSensorsSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztBatteryPushModeSelect(coordinator, entry.entry_id),
+            WohnsinnigVernetztBatteryExcludeSelect(coordinator, entry.entry_id),
+            WohnsinnigVernetztBatteryExcludedListSelect(coordinator, entry.entry_id),
         ]
     )
 
@@ -460,3 +463,156 @@ class WohnsinnigVernetztBatteryPushModeSelect(WohnsinnigVernetztEntity, SelectEn
             if label == option:
                 await self.coordinator.async_set_battery_push_mode(mode_key)
                 return
+
+
+class WohnsinnigVernetztBatteryExcludeSelect(WohnsinnigVernetztEntity, SelectEntity):
+    """1-Klick-Dropdown unter Konfiguration zum Ausschließen eines Batterie-Geräts."""
+
+    _attr_name = "Batterie: Gerät ausschließen"
+    _attr_icon = "mdi:battery-off-outline"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    _HEADER_PICK = "➕ Gerät zum Ausschließen…"
+    _HEADER_EMPTY = "✅ Keine weiteren Geräte"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "battery_exclude_picker")
+
+    def _option_map(self) -> dict[str, str | None]:
+        active_devices, _ = get_battery_exclusion_lists(
+            self.hass,
+            excluded_keys=self.coordinator.battery_excluded_devices,
+            battery_threshold=self.coordinator.battery_threshold,
+        )
+        if not active_devices:
+            return {self._HEADER_EMPTY: None}
+
+        mapping: dict[str, str | None] = {self._HEADER_PICK: None}
+        for dev in active_devices:
+            if dev.get("level") is not None:
+                mark = "🔴 " if dev.get("is_low") else ""
+                prefix = f"{mark}{dev['level']}% · "
+            else:
+                prefix = ""
+            budget = max(8, MAX_SELECT_LABEL_LEN - len(prefix))
+            short_name = compact_select_label(dev["name"], budget)
+            label = _dedupe_label(f"{prefix}{short_name}", mapping, MAX_SELECT_LABEL_LEN)
+            mapping[label] = dev["dedup_key"]
+        return mapping
+
+    @property
+    def options(self) -> list[str]:
+        return list(self._option_map().keys())
+
+    @property
+    def current_option(self) -> str:
+        mapping = self._option_map()
+        return next(iter(mapping.keys()))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        active_devices, excluded_devices = get_battery_exclusion_lists(
+            self.hass,
+            excluded_keys=self.coordinator.battery_excluded_devices,
+            battery_threshold=self.coordinator.battery_threshold,
+        )
+        return {
+            "ueberwachte_geraete": len(active_devices),
+            "ausgeschlossene_geraete": len(excluded_devices),
+        }
+
+    async def async_select_option(self, option: str) -> None:
+        mapping = self._option_map()
+        dedup_key = mapping.get(option)
+        if dedup_key:
+            await self.coordinator.async_exclude_battery_device(dedup_key)
+        else:
+            self.async_write_ha_state()
+
+
+class WohnsinnigVernetztBatteryExcludedListSelect(WohnsinnigVernetztEntity, SelectEntity):
+    """1-Klick-Dropdown unter Konfiguration: zeigt ausgeschlossene Geräte & nimmt sie wieder auf."""
+
+    _attr_name = "Batterie: Ausgeschlossen"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    _RESTORE_ALL_LABEL = "♻️ Alle wieder aufnehmen"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "battery_excluded_restore")
+
+    @property
+    def icon(self) -> str:
+        return (
+            "mdi:battery-lock"
+            if self.coordinator.battery_excluded_devices
+            else "mdi:battery-check-outline"
+        )
+
+    def _header_label(self, count: int) -> str:
+        if count == 0:
+            return "Keine ausgeschlossen"
+        if count == 1:
+            return "🚫 1 ausgeschlossen"
+        return f"🚫 {count} ausgeschlossen"
+
+    def _option_map(self) -> dict[str, str | None]:
+        _, excluded_devices = get_battery_exclusion_lists(
+            self.hass,
+            excluded_keys=self.coordinator.battery_excluded_devices,
+            battery_threshold=self.coordinator.battery_threshold,
+        )
+        header = self._header_label(len(excluded_devices))
+        mapping: dict[str, str | None] = {header: None}
+
+        for dev in excluded_devices:
+            prefix = "↩ "
+            budget = max(8, MAX_SELECT_LABEL_LEN - len(prefix))
+            short_name = compact_select_label(dev["name"], budget)
+            label = _dedupe_label(f"{prefix}{short_name}", mapping, MAX_SELECT_LABEL_LEN)
+            mapping[label] = dev["dedup_key"]
+
+        if len(excluded_devices) >= 2:
+            mapping[self._RESTORE_ALL_LABEL] = "__clear_all__"
+
+        return mapping
+
+    @property
+    def options(self) -> list[str]:
+        return list(self._option_map().keys())
+
+    @property
+    def current_option(self) -> str:
+        mapping = self._option_map()
+        return next(iter(mapping.keys()))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        _, excluded_devices = get_battery_exclusion_lists(
+            self.hass,
+            excluded_keys=self.coordinator.battery_excluded_devices,
+            battery_threshold=self.coordinator.battery_threshold,
+        )
+        return {
+            "ausgeschlossen_anzahl": len(excluded_devices),
+            "ausgeschlossene_geraete": [
+                f"{d['name']} ({d['level_formatted']})"
+                if d.get("level") is not None
+                else d["name"]
+                for d in excluded_devices
+            ],
+        }
+
+    async def async_select_option(self, option: str) -> None:
+        mapping = self._option_map()
+        action_key = mapping.get(option)
+        if action_key == "__clear_all__":
+            await self.coordinator.async_clear_battery_exclusions()
+        elif action_key:
+            await self.coordinator.async_include_battery_device(action_key)
+        else:
+            self.async_write_ha_state()
