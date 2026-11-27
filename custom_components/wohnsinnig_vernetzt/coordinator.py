@@ -360,6 +360,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             "geraete": [],
             "devices": [],
         }
+        self.presence_config_request_id: int = 0
+        self.presence_config_request_user: str | None = None
         self._persisted_presence_enabled: bool = False
         self._persisted_paused_automations: list[str] = []
         self.presence_manager = PresenceSimulationManager(

@@ -56,13 +56,25 @@ class WohnsinnigVernetztOpenPresenceConfigButton(WohnsinnigVernetztEntity, Butto
     ) -> None:
         super().__init__(coordinator, entry_id, "presence_open_config")
 
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "wv_open_config": "presence",
+            "open_request_id": self.coordinator.presence_config_request_id,
+            "open_request_user": self.coordinator.presence_config_request_user,
+        }
+
     async def async_press(self) -> None:
         user_id = self._context.user_id if self._context else None
+        self.coordinator.presence_config_request_id += 1
+        self.coordinator.presence_config_request_user = user_id
+        self.async_write_ha_state()
         self.hass.bus.async_fire(
             EVENT_OPEN_CONFIG,
             {
                 "section": "presence",
                 "entry_id": self._entry_id,
+                "request_id": self.coordinator.presence_config_request_id,
                 "user_id": user_id,
             },
         )

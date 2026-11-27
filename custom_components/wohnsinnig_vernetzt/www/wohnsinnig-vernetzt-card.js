@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.5.0
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.5.1
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -2490,9 +2490,7 @@ class WohnsinnigVernetztPresenceConfigDialog extends HTMLElement {
     this._availableAutomations = [];
     this._jitterMinutes = 7;
     this._autoPauseMotion = true;
-    this._onKeyDown = (ev) => {
-      if (ev.key === "Escape") this.close();
-    };
+    this._isOpen = false;
   }
 
   open(hass) {
@@ -2506,15 +2504,42 @@ class WohnsinnigVernetztPresenceConfigDialog extends HTMLElement {
     if (this.shadowRoot.innerHTML === "") {
       this._renderShell();
     }
+
+    const nativeDlg = this.shadowRoot.getElementById("dlg-native");
     this.style.display = "block";
-    window.addEventListener("keydown", this._onKeyDown);
+    if (nativeDlg) {
+      if (typeof nativeDlg.showModal === "function") {
+        if (!nativeDlg.open) {
+          try {
+            nativeDlg.showModal();
+          } catch (_) {
+            nativeDlg.setAttribute("open", "");
+          }
+        }
+      } else {
+        nativeDlg.setAttribute("open", "");
+      }
+    }
+    this._isOpen = true;
     this._renderBody();
     this._loadConfig();
   }
 
   close() {
-    window.removeEventListener("keydown", this._onKeyDown);
+    const nativeDlg = this.shadowRoot && this.shadowRoot.getElementById("dlg-native");
+    if (nativeDlg) {
+      if (typeof nativeDlg.close === "function" && nativeDlg.open) {
+        try {
+          nativeDlg.close();
+        } catch (_) {
+          nativeDlg.removeAttribute("open");
+        }
+      } else {
+        nativeDlg.removeAttribute("open");
+      }
+    }
     this.style.display = "none";
+    this._isOpen = false;
   }
 
   async _loadConfig() {
@@ -2757,30 +2782,29 @@ class WohnsinnigVernetztPresenceConfigDialog extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>
         :host {
-          position: fixed;
-          inset: 0;
-          z-index: 9999;
           display: none;
           font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif);
         }
-        .backdrop {
-          position: fixed;
-          inset: 0;
-          background: rgba(0, 0, 0, 0.58);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 16px;
-          box-sizing: border-box;
+        dialog#dlg-native {
+          padding: 0;
+          border: none;
+          background: transparent;
+          max-width: min(520px, calc(100vw - 24px));
+          width: 100%;
+          max-height: 88vh;
+          overflow: visible;
+          color: var(--primary-text-color, #e1e1e1);
+        }
+        dialog#dlg-native::backdrop {
+          background: rgba(0, 0, 0, 0.62);
         }
         .modal {
           width: 100%;
-          max-width: 520px;
           max-height: 88vh;
           background: var(--card-background-color, #1c1c1c);
           color: var(--primary-text-color, #e1e1e1);
           border-radius: 16px;
-          box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+          box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
           border: 1px solid var(--divider-color, rgba(255,255,255,0.12));
           display: flex;
           flex-direction: column;
@@ -2979,8 +3003,8 @@ class WohnsinnigVernetztPresenceConfigDialog extends HTMLElement {
           cursor: default;
         }
       </style>
-      <div id="dlg-backdrop" class="backdrop">
-        <div class="modal" role="dialog" aria-modal="true">
+      <dialog id="dlg-native">
+        <div class="modal" role="document">
           <div class="modal-head">
             <div class="modal-title">🏠 Anwesenheitssimulation konfigurieren</div>
             <button id="dlg-close" class="close-btn" type="button" aria-label="Schließen">✕</button>
@@ -3029,12 +3053,18 @@ class WohnsinnigVernetztPresenceConfigDialog extends HTMLElement {
             </div>
           </div>
         </div>
-      </div>
+      </dialog>
     `;
 
-    this.shadowRoot.getElementById("dlg-backdrop").addEventListener("click", (ev) => {
-      if (ev.target.id === "dlg-backdrop") this.close();
+    const nativeDlg = this.shadowRoot.getElementById("dlg-native");
+    nativeDlg.addEventListener("click", (ev) => {
+      if (ev.target === nativeDlg) this.close();
     });
+    nativeDlg.addEventListener("close", () => {
+      this.style.display = "none";
+      this._isOpen = false;
+    });
+
     this.shadowRoot.getElementById("dlg-close").addEventListener("click", () => this.close());
     this.shadowRoot.getElementById("dlg-cancel").addEventListener("click", () => this.close());
     this.shadowRoot.getElementById("dlg-ext-link").addEventListener("click", () => this.close());
@@ -3065,9 +3095,13 @@ if (!customElements.get("wohnsinnig-vernetzt-presence-config-dialog")) {
   );
 }
 
+window.__wvLastPresenceOpenTs = 0;
 window.__wvOpenPresenceConfigDialog = function (hass) {
+  const now = Date.now();
+  if (now - (window.__wvLastPresenceOpenTs || 0) < 1200) return;
   const activeHass = hass || document.querySelector("home-assistant")?.hass;
   if (!activeHass) return;
+  window.__wvLastPresenceOpenTs = now;
   let dlg = document.getElementById("wv-presence-config-dialog");
   if (!dlg) {
     dlg = document.createElement("wohnsinnig-vernetzt-presence-config-dialog");
@@ -3077,26 +3111,45 @@ window.__wvOpenPresenceConfigDialog = function (hass) {
   dlg.open(activeHass);
 };
 
-// Globaler Event-Bridge-Listener: fängt Klicks auf den Button "Konfiguration öffnen" auf jeder HA-Seite ab
-if (!window.__wvConfigBridgeInitialized) {
-  window.__wvConfigBridgeInitialized = true;
+// Doppelte Event- & State-Bridge: funktioniert zuverlässig für ALLE Benutzer, nach Reconnects & über HA-Dialogen
+if (!window.__wvConfigBridgeV2Initialized) {
+  window.__wvConfigBridgeV2Initialized = true;
   let subscribedConn = null;
+  let lastSeenReqId = null;
+  let lastSeenStateTs = null;
 
-  const ensureBridge = () => {
-    const ha = document.querySelector("home-assistant");
-    const hass = ha && ha.hass;
-    const conn = hass && hass.connection;
-    if (!conn || conn === subscribedConn) return;
-    subscribedConn = conn;
+  const findOpenButtonState = (hass) => {
+    if (!hass || !hass.states) return null;
+    for (const st of Object.values(hass.states)) {
+      if (
+        st.entity_id.startsWith("button.") &&
+        st.attributes &&
+        st.attributes.wv_open_config === "presence"
+      ) {
+        return st;
+      }
+    }
+    return null;
+  };
+
+  const triggerIfAuthorized = (hass, reqUser) => {
+    if (document.hidden) return;
+    const curUser = hass?.user?.id;
+    if (reqUser && curUser && reqUser !== curUser) return;
+    window.__wvOpenPresenceConfigDialog(hass);
+  };
+
+  const subscribeWs = (conn) => {
     conn
       .subscribeEvents((ev) => {
-        if (document.visibilityState !== "visible") return;
         const currentHass = document.querySelector("home-assistant")?.hass;
-        const evUser = ev?.data?.user_id;
-        const curUser = currentHass?.user?.id;
-        if (evUser && curUser && evUser !== curUser) return;
+        if (!currentHass) return;
+        const reqId = ev?.data?.request_id;
+        if (typeof reqId === "number") {
+          lastSeenReqId = Math.max(lastSeenReqId || 0, reqId);
+        }
         if (ev?.data?.section === "presence") {
-          window.__wvOpenPresenceConfigDialog(currentHass);
+          triggerIfAuthorized(currentHass, ev?.data?.user_id);
         }
       }, "wohnsinnig_vernetzt_open_config")
       .catch(() => {
@@ -3104,6 +3157,43 @@ if (!window.__wvConfigBridgeInitialized) {
       });
   };
 
-  setInterval(ensureBridge, 2500);
-  ensureBridge();
+  const checkBridge = () => {
+    const ha = document.querySelector("home-assistant");
+    const hass = ha && ha.hass;
+    if (!hass) return;
+
+    // 1. WebSocket-Event-Abo (0ms Reaktionszeit)
+    const conn = hass.connection;
+    if (conn && conn !== subscribedConn) {
+      subscribedConn = conn;
+      subscribeWs(conn);
+      if (typeof conn.addEventListener === "function") {
+        conn.addEventListener("ready", () => {
+          subscribeWs(conn);
+        });
+      }
+    }
+
+    // 2. Zuverlässiger State-Watcher (funktioniert auch ohne Custom-Event-Rechte & nach Reconnects)
+    const btnState = findOpenButtonState(hass);
+    if (!btnState) return;
+
+    const reqId = Number(btnState.attributes.open_request_id || 0);
+    const stateTs = btnState.state || "";
+
+    if (lastSeenReqId === null) {
+      lastSeenReqId = reqId;
+      lastSeenStateTs = stateTs;
+      return;
+    }
+
+    if (reqId > lastSeenReqId || (stateTs && stateTs !== lastSeenStateTs && stateTs !== "unknown" && stateTs !== "unavailable")) {
+      lastSeenReqId = Math.max(lastSeenReqId, reqId);
+      lastSeenStateTs = stateTs;
+      triggerIfAuthorized(hass, btnState.attributes.open_request_user);
+    }
+  };
+
+  setInterval(checkBridge, 350);
+  checkBridge();
 }
