@@ -1,4 +1,4 @@
-"""Wake-Up Light & Sonnenaufgangs-Steuerung mit automatischer Automations-Pause."""
+"""Wake-Up Light & Sonnenaufgangs-Steuerung mit Handy-Wecker (Next Alarm) & Automations-Pause."""
 
 from __future__ import annotations
 
@@ -11,12 +11,16 @@ from typing import Any
 
 import yaml
 
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.helpers.event import async_track_point_in_utc_time
+from homeassistant.helpers.event import (
+    async_track_point_in_utc_time,
+    async_track_state_change_event,
+)
 
 from .const import (
+    DEFAULT_WAKEUP_ALARM_ENTITY,
     DEFAULT_WAKEUP_AUTO_PAUSE,
     DEFAULT_WAKEUP_DAYS,
     DEFAULT_WAKEUP_DURATION,
@@ -27,6 +31,7 @@ from .const import (
     EVENT_WAKEUP_CANCELLED,
     EVENT_WAKEUP_COMPLETED,
     EVENT_WAKEUP_STARTED,
+    WAKEUP_ALARM_MANUAL,
     WAKEUP_DAYS_DAILY,
     WAKEUP_DAYS_WEEKEND,
     WAKEUP_DAYS_WORKDAYS,
@@ -83,6 +88,15 @@ def _local_now() -> datetime:
         return datetime.now().astimezone()
 
 
+def _as_local(dt_val: datetime) -> datetime:
+    try:
+        from homeassistant.util import dt as dt_util
+
+        return dt_util.as_local(dt_val)
+    except Exception:
+        return dt_val.astimezone()
+
+
 def _as_utc(dt_val: datetime) -> datetime:
     try:
         from homeassistant.util import dt as dt_util
@@ -132,6 +146,16 @@ def normalize_wakeup_automations(raw: object) -> list[str]:
     return cleaned
 
 
+def normalize_wakeup_alarm_entity(raw: object) -> str:
+    """Bereinigt eine ausgewählte Wecker-Entität (sensor.* oder input_datetime.*)."""
+    val = str(raw or "").strip()
+    if not val or val == WAKEUP_ALARM_MANUAL:
+        return WAKEUP_ALARM_MANUAL
+    if val.startswith(("sensor.", "input_datetime.")):
+        return val
+    return WAKEUP_ALARM_MANUAL
+
+
 def parse_wakeup_time(raw: str | time | None, fallback: str = DEFAULT_WAKEUP_TIME) -> time:
     """Parst 'HH:MM' oder datetime.time sicher."""
     if isinstance(raw, time):
@@ -147,6 +171,192 @@ def parse_wakeup_time(raw: str | time | None, fallback: str = DEFAULT_WAKEUP_TIM
         pass
     fb = fallback.split(":")
     return time(hour=int(fb[0]), minute=int(fb[1]), second=0)
+
+
+def parse_alarm_sensor_datetime(
+    state_obj: Any, now_local: datetime | None = None
+) -> datetime | None:
+    """Liest den nächsten Weckzeitpunkt aus einem Next-Alarm-Sensor oder input_datetime aus.
+
+    Gibt ein lokales datetime-Objekt zurück oder None, wenn kein aktiver Wecker in der Zukunft steht.
+    """
+    if state_obj is None:
+        return None
+
+    now = now_local or _local_now()
+    raw_state = str(getattr(state_obj, "state", "") or "").strip()
+    attrs = getattr(state_obj, "attributes", {}) or {}
+    entity_id = str(getattr(state_obj, "entity_id", "") or "")
+
+    if not raw_state or raw_state.lower() in ("unavailable", "unknown", "none"):
+        return None
+
+    # 1. input_datetime (z. B. iOS Kurzbefehl / manueller Helfer)
+    if entity_id.startswith("input_datetime."):
+        has_date = bool(attrs.get("has_date"))
+        has_time = bool(attrs.get("has_time", True))
+        if not has_time:
+            return None
+        try:
+            if has_date:
+                dt_naive = datetime.fromisoformat(raw_state.replace(" ", "T"))
+                alarm_dt = dt_naive.replace(tzinfo=now.tzinfo)
+            else:
+                t_val = parse_wakeup_time(raw_state)
+                alarm_dt = now.replace(
+                    hour=t_val.hour,
+                    minute=t_val.minute,
+                    second=0,
+                    microsecond=0,
+                )
+                if alarm_dt <= now:
+                    alarm_dt = alarm_dt + timedelta(days=1)
+            return alarm_dt if alarm_dt > now else None
+        except ValueError:
+            return None
+
+    # 2. ISO-8601 Timestamp-Sensor (Android Companion App next_alarm, Echo, Google Home, etc.)
+    parsed_dt: datetime | None = None
+    try:
+        iso_str = raw_state.replace("Z", "+00:00")
+        parsed_dt = datetime.fromisoformat(iso_str)
+    except ValueError:
+        parsed_dt = None
+
+    # Fallback: Android Companion App Attribut 'Time in Milliseconds'
+    if parsed_dt is None:
+        ms_val = attrs.get("Time in Milliseconds")
+        if isinstance(ms_val, (int, float)) and ms_val > 0:
+            try:
+                parsed_dt = datetime.fromtimestamp(float(ms_val) / 1000.0, tz=timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                parsed_dt = None
+
+    if parsed_dt is None:
+        return None
+
+    if parsed_dt.tzinfo is None:
+        alarm_local = parsed_dt.replace(tzinfo=now.tzinfo)
+    else:
+        alarm_local = _as_local(parsed_dt)
+
+    if alarm_local <= now:
+        return None
+    return alarm_local
+
+
+def get_alarm_sensor_candidates(
+    hass: HomeAssistant, current_entity: str = ""
+) -> list[dict[str, Any]]:
+    """Findet automatisch alle Handy-Wecker (Companion App next_alarm) sowie weitere Wecker-Sensoren.
+
+    Sortiert Handys (mobile_app) ganz nach oben, gefolgt von sonstigen Next-Alarm-Sensoren
+    und input_datetime-Helfern.
+    """
+    ent_reg = None
+    dev_reg = None
+    try:
+        ent_reg = er.async_get(hass)
+        dev_reg = dr.async_get(hass)
+    except Exception:
+        pass
+
+    now = _local_now()
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for st in hass.states.async_all(["sensor", "input_datetime"]):
+        eid = st.entity_id
+        if f".{DOMAIN}" in eid:
+            continue
+        attrs = st.attributes or {}
+        if attrs.get("restored") is True:
+            continue
+
+        domain = eid.split(".", 1)[0]
+        dc = str(attrs.get("device_class") or "").lower()
+        friendly = str(attrs.get("friendly_name") or eid).strip()
+        low_id = eid.lower()
+        low_name = friendly.lower()
+
+        reg_entry = ent_reg.async_get(eid) if ent_reg is not None else None
+        platform = (reg_entry.platform or "").lower() if reg_entry else ""
+
+        device_name = ""
+        is_mobile_app = platform == "mobile_app"
+        if reg_entry and reg_entry.device_id and dev_reg is not None:
+            dev = dev_reg.async_get(reg_entry.device_id)
+            if dev is not None:
+                device_name = (dev.name_by_user or dev.name or "").strip()
+                if any(ident_dom == "mobile_app" for ident_dom, _ in dev.identifiers):
+                    is_mobile_app = True
+
+        tier: int | None = None
+        if domain == "sensor" and dc == "timestamp":
+            if is_mobile_app and ("alarm" in low_id or "wecker" in low_name or "alarm" in low_name):
+                tier = 0  # Handy-Wecker (Companion App)
+            elif "next_alarm" in low_id or "alarm" in low_id or "wecker" in low_name:
+                tier = 1  # Sonstiger Next-Alarm-Sensor (z. B. Echo, Google Home)
+        elif domain == "input_datetime" and bool(attrs.get("has_time", True)):
+            if any(k in low_id or k in low_name for k in ("wecker", "alarm", "wake", "aufwach")):
+                tier = 2  # Expliziter Wecker-Helfer (z. B. iOS Shortcut)
+            else:
+                tier = 3  # Allgemeiner Zeit-Helfer
+
+        # Falls der aktuell gespeicherte Sensor nicht ins Raster fällt, trotzdem behalten
+        if tier is None and eid == current_entity:
+            tier = 4
+        if tier is None:
+            continue
+
+        alarm_dt = parse_alarm_sensor_datetime(st, now_local=now)
+        alarm_preview = alarm_dt.strftime("%d.%m. %H:%M") if alarm_dt else "Kein Wecker"
+
+        if tier == 0:
+            short_name = device_name or friendly.replace("Next alarm", "").replace("Nächster Wecker", "").strip(" -:") or eid
+            display_label = f"📱 {short_name} ({alarm_preview})"
+            compact_name = f"📱 {short_name}"
+        elif tier == 1:
+            short_name = device_name or friendly
+            display_label = f"⏰ {short_name} ({alarm_preview})"
+            compact_name = f"⏰ {short_name}"
+        else:
+            short_name = friendly
+            display_label = f"📅 {short_name} ({alarm_preview})"
+            compact_name = f"📅 {short_name}"
+
+        candidates.append(
+            {
+                "entity_id": eid,
+                "tier": tier,
+                "name": short_name,
+                "friendly_name": friendly,
+                "display_label": display_label,
+                "compact_name": compact_name,
+                "alarm_preview": alarm_preview,
+                "has_alarm": alarm_dt is not None,
+                "is_mobile_app": is_mobile_app,
+            }
+        )
+        seen.add(eid)
+
+    if current_entity and current_entity not in seen:
+        candidates.append(
+            {
+                "entity_id": current_entity,
+                "tier": 5,
+                "name": current_entity,
+                "friendly_name": current_entity,
+                "display_label": f"⏰ {current_entity}",
+                "compact_name": f"⏰ {current_entity}",
+                "alarm_preview": "Nicht gefunden",
+                "has_alarm": False,
+                "is_mobile_app": False,
+            }
+        )
+
+    candidates.sort(key=lambda item: (item["tier"], item["name"].lower(), item["entity_id"]))
+    return candidates
 
 
 def _weekday_matches(weekday_idx: int, rule: str) -> bool:
@@ -165,11 +375,7 @@ def compute_next_wakeup_window(
     duration_minutes: int,
     weekdays: str = WAKEUP_DAYS_DAILY,
 ) -> tuple[datetime, datetime]:
-    """Berechnet das nächste (start_dt, end_dt)-Zeitfenster in lokaler Zeitzone.
-
-    - mode == 'reach_100': end_dt liegt auf target_time (an passendem Wochentag), start_dt = end_dt - duration.
-    - mode == 'start_at': start_dt liegt auf target_time (an passendem Wochentag), end_dt = start_dt + duration.
-    """
+    """Berechnet das nächste (start_dt, end_dt)-Zeitfenster in lokaler Zeitzone (manuelle Uhrzeit)."""
     dur = timedelta(minutes=max(1, min(120, int(duration_minutes))))
     base_date = now_local.date()
 
@@ -201,6 +407,18 @@ def compute_next_wakeup_window(
 
     fallback_start = now_local + timedelta(days=1)
     return fallback_start, fallback_start + dur
+
+
+def compute_alarm_wakeup_window(
+    alarm_local: datetime,
+    mode: str,
+    duration_minutes: int,
+) -> tuple[datetime, datetime]:
+    """Berechnet (start_dt, end_dt) aus einem konkreten Handy-Wecker-Zeitpunkt."""
+    dur = timedelta(minutes=max(1, min(120, int(duration_minutes))))
+    if mode == WAKEUP_MODE_START_AT:
+        return alarm_local, alarm_local + dur
+    return alarm_local - dur, alarm_local
 
 
 def compute_dimming_step_values(
@@ -317,7 +535,7 @@ def detect_lamp_automations_from_yaml(
 
 
 class WakeUpLightManager:
-    """Verwaltet Zeitplan, sanftes Hochdimmen (0 % → 100 %) und Automations-Pause."""
+    """Verwaltet Zeitplan (Handy-Wecker oder feste Zeit), sanftes Hochdimmen & Automations-Pause."""
 
     def __init__(
         self,
@@ -325,6 +543,7 @@ class WakeUpLightManager:
         on_update: Callable[[], None],
         on_persist: Callable[[], Any],
         entities: list[str] | None = None,
+        alarm_entity: str = DEFAULT_WAKEUP_ALARM_ENTITY,
         mode: str = DEFAULT_WAKEUP_MODE,
         wakeup_time: str = DEFAULT_WAKEUP_TIME,
         duration_minutes: int = DEFAULT_WAKEUP_DURATION,
@@ -338,6 +557,7 @@ class WakeUpLightManager:
         self._on_persist = on_persist
 
         self.entities: list[str] = normalize_wakeup_lights(entities)
+        self.alarm_entity: str = normalize_wakeup_alarm_entity(alarm_entity)
         self.mode: str = (
             mode
             if mode in (WAKEUP_MODE_REACH_100, WAKEUP_MODE_START_AT)
@@ -363,16 +583,50 @@ class WakeUpLightManager:
         self.remaining_minutes: int = 0
         self.next_start_dt: datetime | None = None
         self.next_end_dt: datetime | None = None
+        self.next_alarm_dt: datetime | None = None
         self.active_start_dt: datetime | None = None
         self.active_end_dt: datetime | None = None
         self.last_run_info: str = ""
         self.paused_automations: list[str] = []
 
+        self._handled_alarm_ts: int | None = None
+        self._active_alarm_ts: int | None = None
         self._unsub_schedule: CALLBACK_TYPE | None = None
+        self._unsub_alarm_listener: CALLBACK_TYPE | None = None
         self._dim_task: asyncio.Task | None = None
 
     def get_time_obj(self) -> time:
         return parse_wakeup_time(self.wakeup_time)
+
+    def _get_alarm_display_name(self) -> str:
+        if not self.alarm_entity:
+            return ""
+        for cand in get_alarm_sensor_candidates(self.hass, self.alarm_entity):
+            if cand["entity_id"] == self.alarm_entity:
+                return cand["name"]
+        st = self.hass.states.get(self.alarm_entity)
+        if st and st.attributes.get("friendly_name"):
+            return str(st.attributes["friendly_name"])
+        return self.alarm_entity
+
+    def _attach_alarm_listener(self) -> None:
+        if self._unsub_alarm_listener is not None:
+            self._unsub_alarm_listener()
+            self._unsub_alarm_listener = None
+
+        if not self.alarm_entity:
+            return
+
+        async def _handle_alarm_state_changed(_event: Event) -> None:
+            # Wenn gerade schon gedimmt wird, nicht abbrechen (Android aktualisiert next_alarm kurz vor Klingeln)
+            if self.is_running:
+                return
+            self._schedule_next(allow_immediate_start=True)
+            self._on_update()
+
+        self._unsub_alarm_listener = async_track_state_change_event(
+            self.hass, [self.alarm_entity], _handle_alarm_state_changed
+        )
 
     async def async_initialize(
         self,
@@ -387,7 +641,8 @@ class WakeUpLightManager:
             await self._persist()
 
         self.enabled = bool(was_enabled) and bool(self.entities)
-        self._schedule_next()
+        self._attach_alarm_listener()
+        self._schedule_next(allow_immediate_start=False)
         self._on_update()
 
     async def _persist(self) -> None:
@@ -401,14 +656,65 @@ class WakeUpLightManager:
             self._unsub_schedule = None
         self.next_start_dt = None
         self.next_end_dt = None
+        self.next_alarm_dt = None
 
-    def _schedule_next(self) -> None:
-        """Plant den nächsten automatischen Start des Sonnenaufgangs."""
+    def _schedule_next(self, allow_immediate_start: bool = False) -> None:
+        """Plant den nächsten automatischen Start (Handy-Wecker ODER feste Uhrzeit)."""
         self._cancel_schedule()
-        if not self.enabled or not self.entities:
+        if not self.entities:
             return
 
         now_local = _local_now()
+
+        # MODUS A: Dynamischer Handy-Wecker (Next Alarm Sensor)
+        if self.alarm_entity:
+            st = self.hass.states.get(self.alarm_entity)
+            alarm_local = parse_alarm_sensor_datetime(st, now_local=now_local)
+            self.next_alarm_dt = alarm_local
+            if alarm_local is None:
+                # Kein Wecker am Handy gestellt -> Licht bleibt aus!
+                return
+
+            start_local, end_local = compute_alarm_wakeup_window(
+                alarm_local=alarm_local,
+                mode=self.mode,
+                duration_minutes=self.duration_minutes,
+            )
+            self.next_start_dt = start_local
+            self.next_end_dt = end_local
+
+            if not self.enabled or self.is_running:
+                return
+
+            alarm_ts = int(alarm_local.timestamp())
+            if self._handled_alarm_ts == alarm_ts:
+                return
+
+            if start_local > now_local:
+                async def _trigger_alarm_wakeup(_now: datetime, expected_ts: int = alarm_ts) -> None:
+                    self._unsub_schedule = None
+                    if not self.enabled or self.is_running:
+                        return
+                    self._active_alarm_ts = expected_ts
+                    await self.async_start_now(is_scheduled=True)
+
+                self._unsub_schedule = async_track_point_in_utc_time(
+                    self.hass, _trigger_alarm_wakeup, _as_utc(start_local)
+                )
+            elif allow_immediate_start and start_local <= now_local < end_local:
+                # Nutzer hat gerade einen nahen Handy-Wecker gestellt (bereits im Dimm-Fenster) -> sofort sanft starten!
+                rem_sec = (end_local - now_local).total_seconds()
+                rem_min = max(1, int(round(rem_sec / 60.0)))
+                self._active_alarm_ts = alarm_ts
+                self.hass.async_create_task(
+                    self.async_start_now(duration_override=rem_min, is_scheduled=True)
+                )
+            return
+
+        # MODUS B: Feste Uhrzeit (manuell)
+        if not self.enabled:
+            return
+
         start_local, end_local = compute_next_wakeup_window(
             now_local=now_local,
             mode=self.mode,
@@ -438,7 +744,16 @@ class WakeUpLightManager:
         self.enabled = bool(enabled)
         if not self.enabled and self.is_running:
             await self.async_stop(cancelled=True)
-        self._schedule_next()
+        self._schedule_next(allow_immediate_start=self.enabled)
+        await self._persist()
+        self._on_update()
+
+    async def async_set_alarm_entity(self, entity_id: str) -> None:
+        """Wählt einen Handy-Wecker (Next Alarm Sensor) oder wechselt auf feste Uhrzeit."""
+        self.alarm_entity = normalize_wakeup_alarm_entity(entity_id)
+        self._handled_alarm_ts = None
+        self._attach_alarm_listener()
+        self._schedule_next(allow_immediate_start=False)
         await self._persist()
         self._on_update()
 
@@ -446,19 +761,19 @@ class WakeUpLightManager:
         if mode not in (WAKEUP_MODE_REACH_100, WAKEUP_MODE_START_AT):
             return
         self.mode = mode
-        self._schedule_next()
+        self._schedule_next(allow_immediate_start=False)
         await self._persist()
         self._on_update()
 
     async def async_set_time(self, new_time: time) -> None:
         self.wakeup_time = time(new_time.hour, new_time.minute).strftime("%H:%M")
-        self._schedule_next()
+        self._schedule_next(allow_immediate_start=False)
         await self._persist()
         self._on_update()
 
     async def async_set_duration(self, minutes: int) -> None:
         self.duration_minutes = max(1, min(120, int(minutes)))
-        self._schedule_next()
+        self._schedule_next(allow_immediate_start=False)
         await self._persist()
         self._on_update()
 
@@ -470,7 +785,7 @@ class WakeUpLightManager:
         ):
             return
         self.weekdays = weekdays
-        self._schedule_next()
+        self._schedule_next(allow_immediate_start=False)
         await self._persist()
         self._on_update()
 
@@ -662,6 +977,7 @@ class WakeUpLightManager:
                 "entities": list(self.entities),
                 "duration_minutes": dur_min,
                 "paused_automations": list(self.paused_automations),
+                "alarm_entity": self.alarm_entity,
                 "scheduled": is_scheduled,
             },
         )
@@ -733,6 +1049,9 @@ class WakeUpLightManager:
             )
             raise
         finally:
+            if self._active_alarm_ts is not None:
+                self._handled_alarm_ts = self._active_alarm_ts
+                self._active_alarm_ts = None
             self.is_running = False
             self.active_start_dt = None
             self.active_end_dt = None
@@ -740,7 +1059,7 @@ class WakeUpLightManager:
             await self._async_restore_paused_automations()
             await self._persist()
             if self.enabled:
-                self._schedule_next()
+                self._schedule_next(allow_immediate_start=False)
             self._on_update()
 
     async def async_stop(self, cancelled: bool = True) -> None:
@@ -761,8 +1080,11 @@ class WakeUpLightManager:
             self._on_update()
 
     async def async_shutdown(self) -> None:
-        """Beendet Timer & laufenden Task sauber beim Entladen/Neustart."""
+        """Beendet Timer, Alarm-Listener & laufenden Task sauber beim Entladen/Neustart."""
         self._cancel_schedule()
+        if self._unsub_alarm_listener is not None:
+            self._unsub_alarm_listener()
+            self._unsub_alarm_listener = None
         if self._dim_task and not self._dim_task.done():
             self._dim_task.cancel()
             try:
@@ -771,12 +1093,40 @@ class WakeUpLightManager:
                 pass
 
     def get_status_snapshot(self) -> dict[str, Any]:
-        """Liefert alle Statusdaten für Sensor und Dashboard-Karte."""
+        """Liefert alle Statusdaten für Sensor, Switch und Dashboard-Karte."""
         now_local = _local_now()
+        alarm_name = self._get_alarm_display_name()
+        alarm_time_full = ""
+        alarm_hhmm = ""
+        has_phone_alarm = False
+
+        if self.alarm_entity:
+            st = self.hass.states.get(self.alarm_entity)
+            alarm_dt = parse_alarm_sensor_datetime(st, now_local=now_local)
+            if alarm_dt is not None:
+                has_phone_alarm = True
+                alarm_time_full = alarm_dt.strftime("%d.%m. %H:%M")
+                alarm_hhmm = alarm_dt.strftime("%H:%M")
+
         if self.is_running and self.active_start_dt and self.active_end_dt:
             start_str = self.active_start_dt.strftime("%H:%M")
             end_str = self.active_end_dt.strftime("%H:%M")
             next_start_full = self.active_start_dt.strftime("%d.%m. %H:%M")
+        elif self.alarm_entity:
+            if has_phone_alarm:
+                st = self.hass.states.get(self.alarm_entity)
+                alarm_dt = parse_alarm_sensor_datetime(st, now_local=now_local)
+                if alarm_dt is not None:
+                    p_start, p_end = compute_alarm_wakeup_window(
+                        alarm_dt, self.mode, self.duration_minutes
+                    )
+                    start_str = p_start.strftime("%H:%M")
+                    end_str = p_end.strftime("%H:%M")
+                    next_start_full = p_start.strftime("%d.%m. %H:%M")
+                else:
+                    start_str, end_str, next_start_full = "", "", ""
+            else:
+                start_str, end_str, next_start_full = "", "", ""
         elif self.enabled and self.next_start_dt and self.next_end_dt:
             start_str = self.next_start_dt.strftime("%H:%M")
             end_str = self.next_end_dt.strftime("%H:%M")
@@ -797,10 +1147,15 @@ class WakeUpLightManager:
             status_text = "Keine Lampen gewählt"
         elif self.is_running:
             status_text = f"Dimmt · {self.current_brightness_percent} %"
-        elif self.enabled:
-            status_text = f"Geplant · {start_str} → {end_str}"
-        else:
+        elif not self.enabled:
             status_text = "Aus"
+        elif self.alarm_entity:
+            if has_phone_alarm:
+                status_text = f"📱 Wecker · {start_str} → {end_str}"
+            else:
+                status_text = "📱 Kein Wecker gestellt"
+        else:
+            status_text = f"Geplant · {start_str} → {end_str}"
 
         lamp_names: list[str] = []
         for eid in self.entities:
@@ -823,6 +1178,12 @@ class WakeUpLightManager:
             "entities": list(self.entities),
             "lamp_names": lamp_names,
             "lamps_count": len(self.entities),
+            "alarm_entity": self.alarm_entity,
+            "alarm_name": alarm_name,
+            "alarm_source": f"📱 {alarm_name}" if self.alarm_entity else "🕒 Feste Uhrzeit",
+            "has_phone_alarm": has_phone_alarm,
+            "alarm_time_full": alarm_time_full,
+            "alarm_hhmm": alarm_hhmm,
             "mode": self.mode,
             "wakeup_time": self.wakeup_time,
             "duration_minutes": self.duration_minutes,

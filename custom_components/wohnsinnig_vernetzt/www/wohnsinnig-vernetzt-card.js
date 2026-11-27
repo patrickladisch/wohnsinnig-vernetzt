@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.6.0
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.7.0
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -2756,6 +2756,51 @@ class WohnsinnigVernetztPresenceConfigDialog extends HTMLElement {
     });
   }
 
+_renderAlarmSelect() {
+    const sel = this.shadowRoot.getElementById("wud-alarm");
+    if (!sel) return;
+    sel.innerHTML = "";
+
+    const manualOpt = document.createElement("option");
+    manualOpt.value = "";
+    manualOpt.textContent = "🕒 Feste Uhrzeit (manuell)";
+    sel.appendChild(manualOpt);
+
+    this._availableAlarms.forEach((cand) => {
+      const opt = document.createElement("option");
+      opt.value = cand.entity_id;
+      opt.textContent = cand.display_label || cand.name || cand.entity_id;
+      sel.appendChild(opt);
+    });
+
+    sel.value = this._alarmEntity || "";
+  }
+
+  _updateManualTimeVisibility() {
+    const hintEl = this.shadowRoot.getElementById("wud-alarm-hint");
+    const timeField = this.shadowRoot.getElementById("wud-time-field");
+    const daysField = this.shadowRoot.getElementById("wud-days-field");
+    const usingPhone = Boolean(this._alarmEntity);
+
+    if (timeField) timeField.style.opacity = usingPhone ? "0.45" : "1";
+    if (daysField) daysField.style.opacity = usingPhone ? "0.45" : "1";
+
+    if (hintEl) {
+      if (!usingPhone) {
+        hintEl.textContent =
+          "Tipp: Wähle hier dein Handy, dann richtet sich das Licht automatisch nach deinem gestellten Wecker.";
+      } else {
+        const found = this._availableAlarms.find((a) => a.entity_id === this._alarmEntity);
+        if (found && found.has_alarm) {
+          hintEl.textContent = `✅ Erkannter Wecker: ${found.alarm_preview} (${this._mode === "start_at" ? "Startzeit" : "100 % Helligkeit"})`;
+        } else {
+          hintEl.textContent =
+            "📱 Verknüpft – aktuell kein Wecker auf diesem Handy gestellt (Licht bleibt an freien Tagen aus).";
+        }
+      }
+    }
+  }
+
   _renderBody() {
     const loadingEl = this.shadowRoot.getElementById("dlg-loading");
     const formEl = this.shadowRoot.getElementById("dlg-form");
@@ -3179,6 +3224,8 @@ class WohnsinnigVernetztWakeUpCard extends HTMLElement {
       sensor?.attributes?.startzeit ?? "",
       sensor?.attributes?.zielzeit ?? "",
       sensor?.attributes?.lampen_anzahl ?? "",
+      sensor?.attributes?.handy_wecker_entity ?? "",
+      sensor?.attributes?.handy_wecker_zeit ?? "",
     ].join("|");
     if (key !== this._lastKey) {
       this._lastKey = key;
@@ -3261,11 +3308,21 @@ class WohnsinnigVernetztWakeUpCard extends HTMLElement {
       : 0;
 
     if (titleEl) titleEl.textContent = this._config.title || "Wake-Up Light";
+    const alarmEntity = attrs.handy_wecker_entity || "";
+    const alarmName = attrs.handy_wecker_name || "Handy";
+    const alarmTime = attrs.handy_wecker_zeit || "";
+
     if (subEl) {
       if (lampCount === 0) {
         subEl.textContent = "Noch keine Lampen gewählt – tippe auf ⚙️";
       } else if (running) {
         subEl.textContent = `Sonnenaufgang läuft (${startHhmm} → ${endHhmm})`;
+      } else if (alarmEntity) {
+        if (alarmTime) {
+          subEl.textContent = `📱 ${alarmName}: ${alarmTime} → Dimmt ${startHhmm}–${endHhmm}`;
+        } else {
+          subEl.textContent = `📱 ${alarmName}: Aktuell kein Wecker gestellt`;
+        }
       } else if (isOn) {
         subEl.textContent = `Start ${startHhmm} → 100 % um ${endHhmm} (${durMin} Min)`;
       } else {
@@ -3286,10 +3343,13 @@ class WohnsinnigVernetztWakeUpCard extends HTMLElement {
     }
 
     if (pillsEl) {
-      const modeTxt = attrs.modus === "start_at" ? `Start ${attrs.uhrzeit || startHhmm}` : `100 % um ${attrs.uhrzeit || endHhmm}`;
+      const sourcePill = alarmEntity
+        ? `<span class="wu-pill accent">📱 ${alarmName}${alarmTime ? ` (${alarmTime.split(" ").pop()})` : " · kein Wecker"}</span>`
+        : `<span class="wu-pill">🕒 ${attrs.modus === "start_at" ? `Start ${attrs.uhrzeit || startHhmm}` : `100 % um ${attrs.uhrzeit || endHhmm}`}</span>`;
       pillsEl.innerHTML = `
+        ${sourcePill}
         <span class="wu-pill">💡 ${lampCount} ${lampCount === 1 ? "Lampe" : "Lampen"}</span>
-        <span class="wu-pill">⏱️ ${durMin} Min (${modeTxt})</span>
+        <span class="wu-pill">⏱️ ${durMin} Min</span>
         ${running ? `<span class="wu-pill">🛡️ ${pausedCnt} Autom. pausiert</span>` : ""}
       `;
     }
@@ -3328,7 +3388,7 @@ class WohnsinnigVernetztWakeUpCard extends HTMLElement {
         .wu-prog-fill { height: 100%; background: linear-gradient(90deg, #ff7043, #ffca28); border-radius: 3px; transition: width 0.3s; }
         .wu-prog-lbl { font-size: 11px; color: var(--secondary-text-color); margin-top: 4px; }
         .wu-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-        .wu-pill { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--secondary-background-color); color: var(--secondary-text-color); }
+        .wu-pill { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--secondary-background-color); color: var(--secondary-text-color); } .wu-pill.accent { color: var(--primary-color); background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.14); font-weight: 600; }
         .wu-run { width: 100%; margin-top: 10px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--divider-color); background: var(--secondary-background-color); color: var(--primary-text-color); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
         .wu-run:hover:not(:disabled) { border-color: var(--primary-color); color: var(--primary-color); }
         .wu-run.stop { border-color: var(--error-color, #db4437); color: var(--error-color, #db4437); }
@@ -3395,6 +3455,8 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
     this._selectedAutomations = new Set();
     this._availableLights = [];
     this._availableAutomations = [];
+    this._availableAlarms = [];
+    this._alarmEntity = "";
     this._mode = "reach_100";
     this._time = "07:00";
     this._duration = 30;
@@ -3455,6 +3517,8 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
       const data = await this._hass.callApi("GET", "wohnsinnig_vernetzt/wakeup_config");
       this._selectedLights = new Set(data.wakeup_entities || []);
       this._selectedAutomations = new Set(data.wakeup_pause_automations || []);
+      this._alarmEntity = data.wakeup_alarm_entity || "";
+      this._availableAlarms = Array.isArray(data.available_alarm_sensors) ? data.available_alarm_sensors : [];
       this._mode = data.wakeup_mode || "reach_100";
       this._time = data.wakeup_time || "07:00";
       this._duration = Number.isFinite(data.wakeup_duration) ? data.wakeup_duration : 30;
@@ -3483,6 +3547,7 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
     try {
       await this._hass.callApi("POST", "wohnsinnig_vernetzt/wakeup_config", {
         wakeup_entities: Array.from(this._selectedLights),
+        wakeup_alarm_entity: this._alarmEntity,
         wakeup_mode: this._mode,
         wakeup_time: this._time,
         wakeup_duration: this._duration,
@@ -3643,12 +3708,14 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
     if (formEl) formEl.style.display = this._loading ? "none" : "block";
 
     if (!this._loading) {
+      this._renderAlarmSelect();
       this.shadowRoot.getElementById("wud-mode").value = this._mode;
       this.shadowRoot.getElementById("wud-time").value = this._time;
       this.shadowRoot.getElementById("wud-dur").value = String(this._duration);
       this.shadowRoot.getElementById("wud-days").value = this._days;
       this.shadowRoot.getElementById("wud-autopause").checked = this._autoPause;
       this.shadowRoot.getElementById("wud-color").checked = this._sunriseColor;
+      this._updateManualTimeVisibility();
       this._renderLightList();
       this._renderAutoList();
     }
@@ -3680,7 +3747,7 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
         .dlg-item-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .dlg-item-sub { font-size: 11px; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .dlg-empty { font-size: 12px; color: var(--secondary-text-color); text-align: center; padding: 10px 6px; }
-        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+        .alarm-box { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(var(--rgb-primary-color, 3, 169, 244), 0.35); background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.08); margin-bottom: 12px; } .alarm-hint { font-size: 11px; color: var(--secondary-text-color); margin-top: 6px; line-height: 1.35; } .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
         .field { display: flex; flex-direction: column; gap: 4px; }
         .field label { font-size: 11px; color: var(--secondary-text-color); font-weight: 600; }
         .field input, .field select { padding: 7px 9px; border-radius: 8px; border: 1px solid var(--divider-color); background: var(--secondary-background-color); color: var(--primary-text-color); font-family: inherit; font-size: 13px; }
@@ -3715,6 +3782,16 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
                 <div id="wud-light-list" class="dlg-list"></div>
               </div>
 
+              <div class="alarm-box">
+                <div class="field">
+                  <label for="wud-alarm">📱 Handy-Wecker (Next Alarm Sensor)</label>
+                  <select id="wud-alarm">
+                    <option value="">🕒 Feste Uhrzeit (manuell)</option>
+                  </select>
+                </div>
+                <div id="wud-alarm-hint" class="alarm-hint"></div>
+              </div>
+
               <div class="grid-2">
                 <div class="field">
                   <label for="wud-mode">Zeitmodus</label>
@@ -3724,15 +3801,15 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
                   </select>
                 </div>
                 <div class="field">
-                  <label for="wud-time">Uhrzeit</label>
-                  <input id="wud-time" type="time" value="07:00" />
-                </div>
-                <div class="field">
                   <label for="wud-dur">Dimm-Dauer (Minuten)</label>
                   <input id="wud-dur" type="number" min="1" max="120" value="30" />
                 </div>
-                <div class="field">
-                  <label for="wud-days">Wochentage</label>
+                <div id="wud-time-field" class="field">
+                  <label for="wud-time">Feste Uhrzeit (Fallback)</label>
+                  <input id="wud-time" type="time" value="07:00" />
+                </div>
+                <div id="wud-days-field" class="field">
+                  <label for="wud-days">Wochentage (bei fester Zeit)</label>
                   <select id="wud-days">
                     <option value="daily">Jeden Tag</option>
                     <option value="workdays">Werktags (Mo–Fr)</option>
@@ -3794,8 +3871,13 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
       this._autoSearch = ev.target.value || "";
       this._renderAutoList();
     });
+    this.shadowRoot.getElementById("wud-alarm").addEventListener("change", (ev) => {
+      this._alarmEntity = ev.target.value || "";
+      this._updateManualTimeVisibility();
+    });
     this.shadowRoot.getElementById("wud-mode").addEventListener("change", (ev) => {
       this._mode = ev.target.value;
+      this._updateManualTimeVisibility();
     });
     this.shadowRoot.getElementById("wud-time").addEventListener("change", (ev) => {
       this._time = ev.target.value || "07:00";

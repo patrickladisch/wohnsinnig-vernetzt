@@ -19,6 +19,7 @@ from .const import (
     DEVICE_SECTION_CHECKS,
     DEVICE_SECTION_WAKEUP,
     DOMAIN,
+    WAKEUP_ALARM_MANUAL,
     WAKEUP_DAYS_DAILY,
     WAKEUP_DAYS_LABELS,
     WAKEUP_MODE_LABELS,
@@ -30,6 +31,7 @@ from .entity import WohnsinnigVernetztEntity
 from .media_player import get_available_targets
 from .battery_check import get_battery_exclusion_lists
 from .notify_helpers import get_notify_choices
+from .wakeup_light import get_alarm_sensor_candidates
 
 MAX_SELECT_LABEL_LEN = 28
 
@@ -87,6 +89,7 @@ async def async_setup_entry(
             WohnsinnigVernetztBatteryPushModeSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztBatteryExcludeSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztBatteryExcludedListSelect(coordinator, entry.entry_id),
+            WohnsinnigVernetztWakeUpAlarmSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztWakeUpModeSelect(coordinator, entry.entry_id),
             WohnsinnigVernetztWakeUpDaysSelect(coordinator, entry.entry_id),
         ]
@@ -693,3 +696,67 @@ class WohnsinnigVernetztWakeUpDaysSelect(WohnsinnigVernetztEntity, SelectEntity)
             if label == option:
                 await self.coordinator.wakeup_manager.async_set_weekdays(days_key)
                 return
+
+
+class WohnsinnigVernetztWakeUpAlarmSelect(WohnsinnigVernetztEntity, SelectEntity):
+    """Prominentes 1-Klick-Dropdown im Steuerungs-Block: Handy-Wecker (Next Alarm) oder feste Uhrzeit."""
+
+    _device_section = DEVICE_SECTION_WAKEUP
+    _attr_name = "Handy-Wecker"
+
+    _MANUAL_LABEL = "🕒 Feste Uhrzeit (manuell)"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "wakeup_alarm_entity")
+
+    @property
+    def icon(self) -> str:
+        return (
+            "mdi:cellphone-alarm"
+            if self.coordinator.wakeup_manager.alarm_entity
+            else "mdi:alarm"
+        )
+
+    def _option_map(self) -> dict[str, str]:
+        """Liefert {kompakter Anzeigename (<= 28 Zeichen): entity_id oder ''}."""
+        mapping: dict[str, str] = {self._MANUAL_LABEL: WAKEUP_ALARM_MANUAL}
+        candidates = get_alarm_sensor_candidates(
+            self.hass, self.coordinator.wakeup_manager.alarm_entity
+        )
+        for cand in candidates:
+            short = compact_select_label(cand["compact_name"], MAX_SELECT_LABEL_LEN)
+            label = _dedupe_label(short, mapping, MAX_SELECT_LABEL_LEN)
+            mapping[label] = cand["entity_id"]
+        return mapping
+
+    @property
+    def options(self) -> list[str]:
+        return list(self._option_map().keys())
+
+    @property
+    def current_option(self) -> str:
+        mapping = self._option_map()
+        current_eid = self.coordinator.wakeup_manager.alarm_entity
+        for label, eid in mapping.items():
+            if eid == current_eid:
+                return label
+        return self._MANUAL_LABEL
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        snap = self.coordinator.wakeup_manager.get_status_snapshot()
+        return {
+            "handy_wecker_entity": snap["alarm_entity"],
+            "handy_wecker_name": snap["alarm_name"],
+            "wecker_gestellt": snap["has_phone_alarm"],
+            "naechster_wecker": snap["alarm_time_full"] or "Kein Wecker",
+            "berechneter_start": snap["start_hhmm"],
+            "berechnetes_ende": snap["end_hhmm"],
+        }
+
+    async def async_select_option(self, option: str) -> None:
+        mapping = self._option_map()
+        eid = mapping.get(option, WAKEUP_ALARM_MANUAL)
+        await self.coordinator.wakeup_manager.async_set_alarm_entity(eid)

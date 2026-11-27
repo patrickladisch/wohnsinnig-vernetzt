@@ -49,6 +49,7 @@ from .const import (
     DEFAULT_PRESENCE_AUTO_PAUSE_MOTION,
     DEFAULT_PRESENCE_JITTER_MINUTES,
     DEFAULT_SILENT_HOURS,
+    DEFAULT_WAKEUP_ALARM_ENTITY,
     DEFAULT_WAKEUP_AUTO_PAUSE,
     DEFAULT_WAKEUP_DAYS,
     DEFAULT_WAKEUP_DURATION,
@@ -82,6 +83,7 @@ from .presence_simulation import (
 )
 from .wakeup_light import (
     WakeUpLightManager,
+    normalize_wakeup_alarm_entity,
     normalize_wakeup_automations,
     normalize_wakeup_lights,
     parse_wakeup_time,
@@ -290,6 +292,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         presence_auto_pause_motion: bool = DEFAULT_PRESENCE_AUTO_PAUSE_MOTION,
         presence_jitter_minutes: int = DEFAULT_PRESENCE_JITTER_MINUTES,
         wakeup_entities: list[str] | None = None,
+        wakeup_alarm_entity: str = DEFAULT_WAKEUP_ALARM_ENTITY,
         wakeup_mode: str = DEFAULT_WAKEUP_MODE,
         wakeup_time: str = DEFAULT_WAKEUP_TIME,
         wakeup_duration: int = DEFAULT_WAKEUP_DURATION,
@@ -397,6 +400,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             jitter_minutes=presence_jitter_minutes,
         )
 
+        self._config_wakeup_alarm_entity = normalize_wakeup_alarm_entity(wakeup_alarm_entity)
         self._config_wakeup_mode = str(wakeup_mode or DEFAULT_WAKEUP_MODE)
         self._config_wakeup_time = parse_wakeup_time(wakeup_time).strftime("%H:%M")
         self._config_wakeup_duration = max(1, min(120, int(wakeup_duration or DEFAULT_WAKEUP_DURATION)))
@@ -411,6 +415,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             on_update=self.async_update_listeners,
             on_persist=self._async_save_state,
             entities=normalize_wakeup_lights(wakeup_entities),
+            alarm_entity=self._config_wakeup_alarm_entity,
             mode=self._config_wakeup_mode,
             wakeup_time=self._config_wakeup_time,
             duration_minutes=self._config_wakeup_duration,
@@ -509,6 +514,13 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                     stored["wakeup_paused_automations"]
                 )
             if (
+                isinstance(stored.get("wakeup_alarm_entity"), str)
+                and stored.get("last_config_wakeup_alarm_entity") == self._config_wakeup_alarm_entity
+            ):
+                self.wakeup_manager.alarm_entity = normalize_wakeup_alarm_entity(
+                    stored["wakeup_alarm_entity"]
+                )
+            if (
                 isinstance(stored.get("wakeup_mode"), str)
                 and stored.get("last_config_wakeup_mode") == self._config_wakeup_mode
             ):
@@ -577,6 +589,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "wakeup_paused_automations": list(
                     self.wakeup_manager.paused_automations
                 ),
+                "wakeup_alarm_entity": self.wakeup_manager.alarm_entity,
+                "last_config_wakeup_alarm_entity": self._config_wakeup_alarm_entity,
                 "wakeup_mode": self.wakeup_manager.mode,
                 "last_config_wakeup_mode": self._config_wakeup_mode,
                 "wakeup_time": self.wakeup_manager.wakeup_time,

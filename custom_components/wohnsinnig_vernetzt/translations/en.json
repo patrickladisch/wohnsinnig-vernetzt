@@ -25,7 +25,7 @@
         "title": "Configure Wohnsinnig vernetzt",
         "description": "Choose the section you want to configure.",
         "menu_options": {
-          "wakeup": "🌅 Wake-Up Light (Lights, Time, Duration & Automations)",
+          "wakeup": "🌅 Wake-Up Light (Lights, Phone Alarm, Duration & Automations)",
           "presence": "🏠 Presence Simulation (Lights, Switches & Motion Guard)",
           "monitoring": "🔋 Battery Check & Silent Sensors",
           "podcast": "🎙️ Podcast, Push, Blueprints & Alerts"
@@ -67,16 +67,17 @@
       },
       "wakeup": {
         "title": "Configure Wake-Up Light",
-        "description": "Select lights, target or start time, and dimming duration. Automations affecting these lights are automatically disabled during dimming.",
+        "description": "Optionally link your phone's Next Alarm sensor or use a fixed time. Automations affecting these lights are automatically disabled during dimming.",
         "data": {
           "wakeup_entities": "Lights for Wake-Up Light",
           "wakeup_mode": "Time mode (reach 100% at time or start at time)",
-          "wakeup_time": "Time",
+          "wakeup_time": "Fixed time (only used without phone alarm)",
           "wakeup_duration": "Dimming duration from 0% to 100% (minutes)",
-          "wakeup_days": "Active weekdays",
+          "wakeup_days": "Active weekdays (only used without phone alarm)",
           "wakeup_auto_pause": "Automatically disable automations affecting these lights",
           "wakeup_pause_automations": "Additional automations to pause during dimming (optional)",
-          "wakeup_sunrise_color": "Smooth sunrise color temperature (warm white → daylight)"
+          "wakeup_sunrise_color": "Smooth sunrise color temperature (warm white → daylight)",
+          "wakeup_alarm_entity": "📱 Phone Alarm (Next Alarm Sensor – optional)"
         }
       }
     }

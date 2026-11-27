@@ -2,8 +2,8 @@
 
 Die offizielle Smart-Home-Integration zum Podcast **Wohnsinnig vernetzt** (von Niels und Patrick – [wohnsinnigvernetzt.de](https://www.wohnsinnigvernetzt.de)).
 
-## Features (v2.6.0)
-- **Wake-Up Light (Sonnenaufgang 0 % → 100 %):** Wähle eine oder mehrere Lampen, definiere Zielzeit (100 % um) oder Startzeit sowie die Dimm-Dauer (z. B. 30 Min). Betroffene Lampen-Automationen werden während des Dimmens automatisch deaktiviert und danach wieder aktiviert.
+## Features (v2.7.0)
+- **Wake-Up Light (Sonnenaufgang 0 % → 100 %):** Wähle eine oder mehrere Lampen, verknüpfe direkt deinen **Handy-Wecker (Next Alarm Sensor)** oder definiere eine feste Zielzeit (100 % um) bzw. Startzeit sowie die Dimm-Dauer (z. B. 30 Min). Betroffene Lampen-Automationen werden während des Dimmens automatisch deaktiviert und danach wieder aktiviert.
 - **Anwesenheitssimulation (1:1 Verlauf von vor 2 Wochen ± 7 Min):** Wähle beliebige Lampen und Schalter aus und schalte die Simulation über den Hauptschalter (`switch.wohnsinnig_vernetzt_anwesenheitssimulation`) ein oder aus. Ein eigener rollierender 21-Tage-Verlauf sorgt dafür, dass die 14-Tage-Wiedergabe auch bei Standard-Recorder-Einstellungen (`purge_keep_days: 10`) zuverlässig funktioniert. Doppelter Bewegungsmelder-Schutz (Automations-Pause + Echtzeit-Zustandswächter) verhindert zuverlässig, dass Bewegungsmelder dazwischenfunken.
 - **Podcast-Player & Episodenliste:** Kompakte Dashboard-Karte (`custom:wohnsinnig-vernetzt-card`) zum direkten Anhören sowie eine native `media_player`-Entität für Lautsprecher im Haus.
 - **Native Blueprint-Updates:** Importiert alle Blueprints von `wohnsinnigvernetzt.de` per Klick direkt nach Home Assistant und überwacht installierte Blueprints über eine native `update`-Entität – inklusive 1-Klick-Update unter *Einstellungen → Updates*.

@@ -205,6 +205,8 @@ class WohnsinnigVernetztWakeUpLightSwitch(WohnsinnigVernetztEntity, SwitchEntity
             "status": snap["status"],
             "lampen_anzahl": snap["lamps_count"],
             "ausgewaehlte_lampen": snap["lamp_names"],
+            "wecker_quelle": snap["alarm_source"],
+            "handy_wecker_zeit": snap["alarm_time_full"],
             "startzeit": snap["start_hhmm"],
             "zielzeit": snap["end_hhmm"],
             "dauer_minuten": snap["duration_minutes"],

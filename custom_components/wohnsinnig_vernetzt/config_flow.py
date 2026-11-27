@@ -34,6 +34,7 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_SILENT_HOURS,
     CONF_SPOTIFY_SHOW_URL,
+    CONF_WAKEUP_ALARM_ENTITY,
     CONF_WAKEUP_AUTO_PAUSE,
     CONF_WAKEUP_DAYS,
     CONF_WAKEUP_DURATION,
@@ -56,12 +57,14 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SILENT_HOURS,
     DEFAULT_SPOTIFY_SHOW_URL,
+    DEFAULT_WAKEUP_ALARM_ENTITY,
     DEFAULT_WAKEUP_AUTO_PAUSE,
     DEFAULT_WAKEUP_DAYS,
     DEFAULT_WAKEUP_DURATION,
     DEFAULT_WAKEUP_MODE,
     DEFAULT_WAKEUP_SUNRISE_COLOR,
     DEFAULT_WAKEUP_TIME,
+    WAKEUP_ALARM_MANUAL,
     WAKEUP_DAYS_LABELS,
     WAKEUP_MODE_LABELS,
     DOMAIN,
@@ -74,6 +77,8 @@ from .presence_simulation import (
     normalize_presence_entities,
 )
 from .wakeup_light import (
+    get_alarm_sensor_candidates,
+    normalize_wakeup_alarm_entity,
     normalize_wakeup_automations,
     normalize_wakeup_lights,
     parse_wakeup_time,
@@ -276,11 +281,27 @@ def _build_presence_schema(defaults: dict) -> vol.Schema:
     )
 
 
-def _build_wakeup_schema(defaults: dict) -> vol.Schema:
+def _build_wakeup_schema(hass: HomeAssistant, defaults: dict) -> vol.Schema:
     current_lights = normalize_wakeup_lights(defaults.get(CONF_WAKEUP_ENTITIES))
+    current_alarm = normalize_wakeup_alarm_entity(
+        defaults.get(CONF_WAKEUP_ALARM_ENTITY, DEFAULT_WAKEUP_ALARM_ENTITY)
+    )
     current_autos = normalize_wakeup_automations(
         defaults.get(CONF_WAKEUP_PAUSE_AUTOMATIONS)
     )
+    alarm_choices = [
+        selector.SelectOptionDict(
+            value=WAKEUP_ALARM_MANUAL,
+            label="🕒 Feste Uhrzeit (manuell)",
+        )
+    ]
+    for cand in get_alarm_sensor_candidates(hass, current_alarm):
+        alarm_choices.append(
+            selector.SelectOptionDict(
+                value=cand["entity_id"],
+                label=cand["display_label"],
+            )
+        )
     mode_choices = [
         selector.SelectOptionDict(value=k, label=v)
         for k, v in WAKEUP_MODE_LABELS.items()
@@ -302,6 +323,16 @@ def _build_wakeup_schema(defaults: dict) -> vol.Schema:
                 selector.EntitySelectorConfig(
                     domain=["light"],
                     multiple=True,
+                )
+            ),
+            vol.Optional(
+                CONF_WAKEUP_ALARM_ENTITY,
+                default=current_alarm,
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=alarm_choices,
+                    custom_value=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
             vol.Required(
@@ -415,6 +446,7 @@ class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
             )
             wm = coordinator.wakeup_manager
             current[CONF_WAKEUP_ENTITIES] = list(wm.entities)
+            current[CONF_WAKEUP_ALARM_ENTITY] = wm.alarm_entity
             current[CONF_WAKEUP_MODE] = wm.mode
             current[CONF_WAKEUP_TIME] = wm.wakeup_time
             current[CONF_WAKEUP_DURATION] = wm.duration_minutes
@@ -437,6 +469,9 @@ class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
             merged[CONF_WAKEUP_ENTITIES] = normalize_wakeup_lights(
                 merged.get(CONF_WAKEUP_ENTITIES)
             )
+            merged[CONF_WAKEUP_ALARM_ENTITY] = normalize_wakeup_alarm_entity(
+                merged.get(CONF_WAKEUP_ALARM_ENTITY)
+            )
             merged[CONF_WAKEUP_PAUSE_AUTOMATIONS] = normalize_wakeup_automations(
                 merged.get(CONF_WAKEUP_PAUSE_AUTOMATIONS)
             )
@@ -447,7 +482,7 @@ class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="wakeup",
-            data_schema=_build_wakeup_schema(current),
+            data_schema=_build_wakeup_schema(self.hass, current),
         )
 
     async def async_step_presence(self, user_input=None):

@@ -40,6 +40,7 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_SILENT_HOURS,
     CONF_SPOTIFY_SHOW_URL,
+    CONF_WAKEUP_ALARM_ENTITY,
     CONF_WAKEUP_AUTO_PAUSE,
     CONF_WAKEUP_DAYS,
     CONF_WAKEUP_DURATION,
@@ -62,6 +63,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SILENT_HOURS,
     DEFAULT_SPOTIFY_SHOW_URL,
+    DEFAULT_WAKEUP_ALARM_ENTITY,
     DEFAULT_WAKEUP_AUTO_PAUSE,
     DEFAULT_WAKEUP_DAYS,
     DEFAULT_WAKEUP_DURATION,
@@ -94,6 +96,8 @@ from .presence_simulation import (
     normalize_presence_entities,
 )
 from .wakeup_light import (
+    get_alarm_sensor_candidates,
+    normalize_wakeup_alarm_entity,
     normalize_wakeup_automations,
     normalize_wakeup_lights,
     parse_wakeup_time,
@@ -506,10 +510,13 @@ class WohnsinnigVernetztWakeUpConfigView(HomeAssistantView):
             )
         automations.sort(key=lambda item: (item["name"].lower(), item["entity_id"]))
 
+        alarm_sensors = get_alarm_sensor_candidates(hass, wm.alarm_entity)
         return self.json(
             {
                 "enabled": wm.enabled,
                 "wakeup_entities": list(wm.entities),
+                "wakeup_alarm_entity": wm.alarm_entity,
+                "available_alarm_sensors": alarm_sensors,
                 "wakeup_mode": wm.mode,
                 "wakeup_time": wm.wakeup_time,
                 "wakeup_duration": wm.duration_minutes,
@@ -535,6 +542,9 @@ class WohnsinnigVernetztWakeUpConfigView(HomeAssistantView):
             return self.json({"error": "Ungültiges JSON."}, status_code=400)
 
         lights = normalize_wakeup_lights(payload.get("wakeup_entities"))
+        alarm_entity = normalize_wakeup_alarm_entity(
+            payload.get("wakeup_alarm_entity")
+        )
         automations = normalize_wakeup_automations(
             payload.get("wakeup_pause_automations")
         )
@@ -554,6 +564,7 @@ class WohnsinnigVernetztWakeUpConfigView(HomeAssistantView):
 
         merged = {**entry.data, **entry.options}
         merged[CONF_WAKEUP_ENTITIES] = lights
+        merged[CONF_WAKEUP_ALARM_ENTITY] = alarm_entity
         merged[CONF_WAKEUP_MODE] = mode
         merged[CONF_WAKEUP_TIME] = w_time
         merged[CONF_WAKEUP_DURATION] = duration
@@ -674,6 +685,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
         ),
         wakeup_entities=config.get(CONF_WAKEUP_ENTITIES),
+        wakeup_alarm_entity=str(
+            config.get(CONF_WAKEUP_ALARM_ENTITY, DEFAULT_WAKEUP_ALARM_ENTITY)
+        ),
         wakeup_mode=str(config.get(CONF_WAKEUP_MODE, DEFAULT_WAKEUP_MODE)),
         wakeup_time=str(config.get(CONF_WAKEUP_TIME, DEFAULT_WAKEUP_TIME)),
         wakeup_duration=int(

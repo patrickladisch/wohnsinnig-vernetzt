@@ -1,7 +1,7 @@
 """Konstanten für Wohnsinnig vernetzt."""
 
 DOMAIN = "wohnsinnig_vernetzt"
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 
 DEFAULT_RSS_URL = "https://anchor.fm/s/111a8abd0/podcast/rss"
 DEFAULT_BLUEPRINTS_URL = "https://www.wohnsinnigvernetzt.de/"
@@ -129,6 +129,8 @@ DEFAULT_WAKEUP_DURATION = 30
 DEFAULT_WAKEUP_DAYS = WAKEUP_DAYS_DAILY
 DEFAULT_WAKEUP_AUTO_PAUSE = True
 DEFAULT_WAKEUP_SUNRISE_COLOR = True
+DEFAULT_WAKEUP_ALARM_ENTITY = ""
+WAKEUP_ALARM_MANUAL = ""
 
 CONF_WAKEUP_ENTITIES = "wakeup_entities"
 CONF_WAKEUP_MODE = "wakeup_mode"
@@ -138,6 +140,7 @@ CONF_WAKEUP_DAYS = "wakeup_days"
 CONF_WAKEUP_AUTO_PAUSE = "wakeup_auto_pause"
 CONF_WAKEUP_PAUSE_AUTOMATIONS = "wakeup_pause_automations"
 CONF_WAKEUP_SUNRISE_COLOR = "wakeup_sunrise_color"
+CONF_WAKEUP_ALARM_ENTITY = "wakeup_alarm_entity"
 
 EVENT_WAKEUP_STARTED = f"{DOMAIN}_wakeup_started"
 EVENT_WAKEUP_COMPLETED = f"{DOMAIN}_wakeup_completed"

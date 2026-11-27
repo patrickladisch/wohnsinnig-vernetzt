@@ -25,7 +25,7 @@
         "title": "Wohnsinnig vernetzt konfigurieren",
         "description": "Wähle den Bereich, den du anpassen möchtest.",
         "menu_options": {
-          "wakeup": "🌅 Wake-Up Light (Lampen, Zeit, Dauer & Automationen)",
+          "wakeup": "🌅 Wake-Up Light (Lampen, Handy-Wecker, Dauer & Automationen)",
           "presence": "🏠 Anwesenheitssimulation (Lampen, Schalter & Bewegungsmelder)",
           "monitoring": "🔋 Batterie-Check & Stille Sensoren",
           "podcast": "🎙️ Podcast, Push, Blueprints & Eilmeldungen"
@@ -67,16 +67,17 @@
       },
       "wakeup": {
         "title": "Wake-Up Light konfigurieren",
-        "description": "Wähle deine Lampen, lege Ziel- oder Startzeit sowie den Dimm-Zeitraum fest. Automationen, die diese Lampen betreffen, werden während des Dimmens automatisch deaktiviert.",
+        "description": "Verknüpfe optional deinen Handy-Wecker (Next Alarm Sensor) oder stelle eine feste Uhrzeit ein. Betroffene Lampen-Automationen werden während des Dimmens automatisch deaktiviert.",
         "data": {
           "wakeup_entities": "Lampen für das Wake-Up Light",
           "wakeup_mode": "Zeitmodus (100 % um Weckzeit oder Startzeit)",
-          "wakeup_time": "Uhrzeit",
+          "wakeup_time": "Feste Uhrzeit (nur aktiv ohne Handy-Wecker)",
           "wakeup_duration": "Dimm-Dauer von 0 % auf 100 % (Minuten)",
-          "wakeup_days": "Aktive Wochentage",
+          "wakeup_days": "Aktive Wochentage (nur aktiv ohne Handy-Wecker)",
           "wakeup_auto_pause": "Betroffene Lampen-Automationen während des Dimmens deaktivieren",
           "wakeup_pause_automations": "Zusätzliche Automationen während des Dimmens pausieren (optional)",
-          "wakeup_sunrise_color": "Sanfte Sonnenaufgangs-Farbtemperatur (Warmweiß → Tageslicht)"
+          "wakeup_sunrise_color": "Sanfte Sonnenaufgangs-Farbtemperatur (Warmweiß → Tageslicht)",
+          "wakeup_alarm_entity": "📱 Handy-Wecker (Next Alarm Sensor – optional)"
         }
       }
     }
