@@ -22,16 +22,20 @@ from .const import (
     CARD_FILENAME,
     CARD_URL_BASE,
     CONF_ALERTS_URL,
+    CONF_BATTERY_EXCLUDED_DEVICES,
     CONF_BATTERY_PUSH_ENABLED,
     CONF_BATTERY_PUSH_MODE,
     CONF_BATTERY_PUSH_TIME,
-    CONF_BATTERY_EXCLUDED_DEVICES,
     CONF_BATTERY_THRESHOLD,
     CONF_BLUEPRINTS_URL,
     CONF_DEFAULT_TARGET,
     CONF_LOGO_URL,
     CONF_NOTIFY_SERVICE,
     CONF_NOTIFY_SERVICES,
+    CONF_PRESENCE_AUTO_PAUSE_MOTION,
+    CONF_PRESENCE_ENTITIES,
+    CONF_PRESENCE_JITTER_MINUTES,
+    CONF_PRESENCE_PAUSE_AUTOMATIONS,
     CONF_RSS_URL,
     CONF_SCAN_INTERVAL,
     CONF_SILENT_HOURS,
@@ -44,6 +48,8 @@ from .const import (
     DEFAULT_BLUEPRINTS_URL,
     DEFAULT_LOGO_URL,
     DEFAULT_NOTIFY_SERVICES,
+    DEFAULT_PRESENCE_AUTO_PAUSE_MOTION,
+    DEFAULT_PRESENCE_JITTER_MINUTES,
     DEFAULT_RSS_URL,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SILENT_HOURS,
@@ -53,10 +59,10 @@ from .const import (
     DEVICE_MODEL,
     DEVICE_NAME,
     DOMAIN,
-    SERVICE_IMPORT_BLUEPRINT,
-    SERVICE_MARK_EPISODE_SEEN,
     SERVICE_EXCLUDE_BATTERY_DEVICE,
+    SERVICE_IMPORT_BLUEPRINT,
     SERVICE_INCLUDE_BATTERY_DEVICE,
+    SERVICE_MARK_EPISODE_SEEN,
     SERVICE_RESET_BATTERY_PUSH_MEMORY,
     SERVICE_RUN_BATTERY_CHECK,
     SERVICE_RUN_SILENT_SENSORS_CHECK,
@@ -107,7 +113,7 @@ BATTERY_EXCLUSION_SCHEMA = vol.Schema(
 
 
 class WohnsinnigVernetztEpisodesView(HomeAssistantView):
-    """Liefert Podcast-Episoden, Blueprints und Player-Infos als JSON an die Karte."""
+    """Liefert Podcast-Episoden, Blueprints und Status-Infos als JSON an die Karten."""
 
     url = f"/api/{DOMAIN}/episodes"
     name = f"api:{DOMAIN}:episodes"
@@ -145,6 +151,7 @@ class WohnsinnigVernetztEpisodesView(HomeAssistantView):
                     if k != "all_battery_levels"
                 },
                 "silent_sensors": coordinator.silent_sensors_result,
+                "presence": coordinator.presence_manager.get_status_snapshot(),
                 "spotify_show_id": coordinator.spotify_show_id,
                 "spotify_show_url": coordinator.spotify_show_url,
                 "target_entity": coordinator.target_entity,
@@ -329,7 +336,7 @@ LEGACY_ENTITY_UNIQUE_ID_SUFFIXES = (
 
 
 def _cleanup_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Entfernt veraltete Feedback-Entitäten dauerhaft aus der HA-Entity-Registry."""
+    """Entfernt veraltete Entitäten dauerhaft aus der HA-Entity-Registry."""
     ent_reg = er.async_get(hass)
     for reg_entry in list(er.async_entries_for_config_entry(ent_reg, entry.entry_id)):
         uid = reg_entry.unique_id or ""
@@ -411,6 +418,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         battery_push_time=str(
             config.get(CONF_BATTERY_PUSH_TIME, DEFAULT_BATTERY_PUSH_TIME)
         ),
+        presence_entities=config.get(CONF_PRESENCE_ENTITIES),
+        presence_pause_automations=config.get(CONF_PRESENCE_PAUSE_AUTOMATIONS),
+        presence_auto_pause_motion=bool(
+            config.get(
+                CONF_PRESENCE_AUTO_PAUSE_MOTION, DEFAULT_PRESENCE_AUTO_PAUSE_MOTION
+            )
+        ),
+        presence_jitter_minutes=int(
+            config.get(
+                CONF_PRESENCE_JITTER_MINUTES, DEFAULT_PRESENCE_JITTER_MINUTES
+            )
+        ),
         default_target=config.get(CONF_DEFAULT_TARGET, BROWSER_TARGET),
     )
 
@@ -429,18 +448,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await coordinator.async_mark_latest_episode_seen()
 
     entry.async_on_unload(
-        hass.bus.async_listen("mobile_app_notification_action", _handle_mobile_app_action)
+        hass.bus.async_listen(
+            "mobile_app_notification_action", _handle_mobile_app_action
+        )
     )
 
-    # Erste lokale Checks nach vollständigem HA-Start ausführen (vermeidet Boot-Fehlalarme)
-    if not hass.is_running:
-        async def _run_initial_local_checks(_event: Event) -> None:
+    # Anwesenheitssimulation & lokale Checks starten (nach HA-Start, falls noch am Booten)
+    if hass.is_running:
+        await coordinator.async_init_presence_simulation()
+    else:
+        async def _run_after_ha_started(_event: Event) -> None:
+            await coordinator.async_init_presence_simulation()
             await coordinator.async_run_battery_check(notify=False)
             await coordinator.async_run_silent_sensors_check(notify=False)
 
         entry.async_on_unload(
             hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_STARTED, _run_initial_local_checks
+                EVENT_HOMEASSISTANT_STARTED, _run_after_ha_started
             )
         )
 
@@ -488,7 +512,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ).get("coordinator")
             if coord is None:
                 raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
-            await coord.async_run_battery_check(notify=bool(call.data.get("notify", False)))
+            await coord.async_run_battery_check(
+                notify=bool(call.data.get("notify", False))
+            )
 
         hass.services.async_register(
             DOMAIN,
@@ -527,8 +553,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_register(
             DOMAIN,
             SERVICE_RESET_BATTERY_PUSH_MEMORY,
-            SERVICE_EXCLUDE_BATTERY_DEVICE,
-            SERVICE_INCLUDE_BATTERY_DEVICE,
             _handle_reset_battery_memory,
         )
 
@@ -588,9 +612,13 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Entlädt die Integration sauber."""
+    domain_data = hass.data.get(DOMAIN, {})
+    coordinator: WohnsinnigVernetztCoordinator | None = domain_data.get(entry.entry_id)
+    if coordinator is not None:
+        await coordinator.async_shutdown_presence()
+
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        domain_data = hass.data.get(DOMAIN, {})
         domain_data.pop(entry.entry_id, None)
         domain_data.pop("coordinator", None)
         for svc in (
@@ -599,6 +627,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_RUN_BATTERY_CHECK,
             SERVICE_RUN_SILENT_SENSORS_CHECK,
             SERVICE_RESET_BATTERY_PUSH_MEMORY,
+            SERVICE_EXCLUDE_BATTERY_DEVICE,
+            SERVICE_INCLUDE_BATTERY_DEVICE,
         ):
             if hass.services.has_service(DOMAIN, svc):
                 hass.services.async_remove(DOMAIN, svc)

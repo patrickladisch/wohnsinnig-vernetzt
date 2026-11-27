@@ -22,6 +22,7 @@ async def async_setup_entry(
     coordinator: WohnsinnigVernetztCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
         [
+            WohnsinnigVernetztPresenceSimulationSwitch(coordinator, entry.entry_id),
             WohnsinnigVernetztNotifySwitch(coordinator, entry.entry_id),
             WohnsinnigVernetztAlertsSwitch(coordinator, entry.entry_id),
             WohnsinnigVernetztBatteryPushSwitch(coordinator, entry.entry_id),
@@ -116,3 +117,47 @@ class WohnsinnigVernetztBatteryPushSwitch(WohnsinnigVernetztEntity, SwitchEntity
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.async_set_battery_push_enabled(False)
+
+
+class WohnsinnigVernetztPresenceSimulationSwitch(WohnsinnigVernetztEntity, SwitchEntity):
+    """HAUPTSCHALTER für die Anwesenheitssimulation (1:1 Verlauf vor 2 Wochen ± 7 Min)."""
+
+    _attr_name = "Anwesenheitssimulation"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "presence_simulation_enabled")
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.presence_manager.enabled
+
+    @property
+    def icon(self) -> str:
+        return (
+            "mdi:home-account"
+            if self.coordinator.presence_manager.enabled
+            else "mdi:home-outline"
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        snap = self.coordinator.presence_manager.get_status_snapshot()
+        return {
+            "status": snap["status"],
+            "geraete_anzahl": snap["entities_count"],
+            "ausgewaehlte_geraete": snap["entity_names"],
+            "versatz": f"vor {snap['days_offset']} Tagen",
+            "zufall_abweichung": f"± {snap['jitter_minutes']} Min",
+            "datenquelle": snap["data_source"],
+            "naechste_schaltung": snap["next_event"],
+            "pausierte_automationen": snap["paused_automation_names"],
+            "abgewehrte_eingriffe": snap["blocked_interferences"],
+        }
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.async_set_presence_simulation_enabled(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.async_set_presence_simulation_enabled(False)

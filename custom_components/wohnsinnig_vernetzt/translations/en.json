@@ -3,21 +3,15 @@
     "step": {
       "user": {
         "title": "Set up Wohnsinnig vernetzt",
-        "description": "Configure podcast, push notifications, battery check, silent sensors monitor, blueprints, and alerts.",
+        "description": "Configure podcast, push notifications, and blueprints. Battery check, silent sensors, and presence simulation can be configured anytime via Options.",
         "data": {
           "rss_url": "Podcast RSS URL",
           "notify_services": "Phone / push notification for new episodes",
           "blueprints_url": "Blueprints & website URL",
           "alerts_url": "Community alerts JSON URL (optional)",
-          "battery_threshold": "Battery check: alert threshold (below %)",
           "scan_interval": "Update interval (minutes)",
           "spotify_show_url": "Spotify Show URL (optional)",
-          "logo_url": "Logo URL (default: built-in logo)",
-          "battery_push_enabled": "Proactive battery push enabled (anti-spam)",
-          "battery_push_mode": "Battery push mode",
-          "battery_push_time": "Daily time for bundled battery push",
-          "silent_hours": "Silent sensors: alert threshold (hours without update)",
-          "battery_excluded_devices": "Battery check: Excluded devices"
+          "logo_url": "Logo URL (default: built-in logo)"
         }
       }
     },
@@ -28,21 +22,46 @@
   "options": {
     "step": {
       "init": {
-        "title": "Wohnsinnig vernetzt Options",
+        "title": "Configure Wohnsinnig vernetzt",
+        "description": "Choose the section you want to configure.",
+        "menu_options": {
+          "presence": "🏠 Presence Simulation (Lights, Switches & Motion Guard)",
+          "monitoring": "🔋 Battery Check & Silent Sensors",
+          "podcast": "🎙️ Podcast, Push, Blueprints & Alerts"
+        }
+      },
+      "presence": {
+        "title": "Presence Simulation",
+        "description": "Select lights and switches to replay their exact switching behavior from 14 days ago (± 7 min) while blocking motion sensors.",
+        "data": {
+          "presence_entities": "Lights & switches to simulate",
+          "presence_jitter_minutes": "Organic random jitter (± minutes)",
+          "presence_auto_pause_motion": "Auto-detect & pause motion sensor automations",
+          "presence_pause_automations": "Additional motion automations to pause (optional)"
+        }
+      },
+      "monitoring": {
+        "title": "Battery Check & Silent Sensors",
+        "description": "Configure thresholds, excluded devices, and anti-spam battery push notifications.",
+        "data": {
+          "battery_threshold": "Battery check: alert threshold (below %)",
+          "battery_excluded_devices": "Battery check: Excluded devices",
+          "battery_push_enabled": "Proactive battery push enabled (anti-spam)",
+          "battery_push_mode": "Battery push mode",
+          "battery_push_time": "Daily time for bundled battery push",
+          "silent_hours": "Silent sensors: alert threshold (hours without update)"
+        }
+      },
+      "podcast": {
+        "title": "Podcast, Push & Blueprints",
         "data": {
           "rss_url": "Podcast RSS URL",
           "notify_services": "Phone / push notification for new episodes",
           "blueprints_url": "Blueprints & website URL",
           "alerts_url": "Community alerts JSON URL (optional)",
-          "battery_threshold": "Battery check: alert threshold (below %)",
           "scan_interval": "Update interval (minutes)",
           "spotify_show_url": "Spotify Show URL (optional)",
-          "logo_url": "Logo URL",
-          "battery_push_enabled": "Proactive battery push enabled (anti-spam)",
-          "battery_push_mode": "Battery push mode",
-          "battery_push_time": "Daily time for bundled battery push",
-          "silent_hours": "Silent sensors: alert threshold (hours without update)",
-          "battery_excluded_devices": "Battery check: Excluded devices"
+          "logo_url": "Logo URL"
         }
       }
     }

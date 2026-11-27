@@ -1,4 +1,4 @@
-"""Config Flow für Wohnsinnig vernetzt."""
+"""Config Flow & übersichtliches Options-Menü für Wohnsinnig vernetzt."""
 
 from __future__ import annotations
 
@@ -8,18 +8,28 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 
+from .battery_check import (
+    _resolve_excluded_display_name,
+    get_all_battery_devices,
+    normalize_battery_exclusions,
+    resolve_exclusion_key,
+)
 from .const import (
     BATTERY_PUSH_MODE_LABELS,
     CONF_ALERTS_URL,
+    CONF_BATTERY_EXCLUDED_DEVICES,
     CONF_BATTERY_PUSH_ENABLED,
     CONF_BATTERY_PUSH_MODE,
     CONF_BATTERY_PUSH_TIME,
-    CONF_BATTERY_EXCLUDED_DEVICES,
     CONF_BATTERY_THRESHOLD,
     CONF_BLUEPRINTS_URL,
     CONF_LOGO_URL,
     CONF_NOTIFY_SERVICE,
     CONF_NOTIFY_SERVICES,
+    CONF_PRESENCE_AUTO_PAUSE_MOTION,
+    CONF_PRESENCE_ENTITIES,
+    CONF_PRESENCE_JITTER_MINUTES,
+    CONF_PRESENCE_PAUSE_AUTOMATIONS,
     CONF_RSS_URL,
     CONF_SCAN_INTERVAL,
     CONF_SILENT_HOURS,
@@ -32,6 +42,8 @@ from .const import (
     DEFAULT_BLUEPRINTS_URL,
     DEFAULT_LOGO_URL,
     DEFAULT_NOTIFY_SERVICES,
+    DEFAULT_PRESENCE_AUTO_PAUSE_MOTION,
+    DEFAULT_PRESENCE_JITTER_MINUTES,
     DEFAULT_RSS_URL,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SILENT_HOURS,
@@ -39,17 +51,15 @@ from .const import (
     DOMAIN,
     NOTIFY_NONE,
 )
-from .battery_check import (
-    _resolve_excluded_display_name,
-    get_all_battery_devices,
-    normalize_battery_exclusions,
-    resolve_exclusion_key,
-)
 from .coordinator import normalize_notify_services, parse_hhmm_time
 from .notify_helpers import get_mobile_app_services, get_notify_choices
+from .presence_simulation import (
+    normalize_automation_entities,
+    normalize_presence_entities,
+)
 
 
-def _build_schema(
+def _build_podcast_schema(
     hass: HomeAssistant, defaults: dict, is_initial: bool = False
 ) -> vol.Schema:
     raw_notify = defaults.get(
@@ -73,6 +83,49 @@ def _build_schema(
         if svc_id != NOTIFY_NONE
     ]
 
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_RSS_URL, default=defaults.get(CONF_RSS_URL, DEFAULT_RSS_URL)
+            ): str,
+            vol.Optional(
+                CONF_NOTIFY_SERVICES,
+                default=current_notify,
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=choices,
+                    multiple=True,
+                    custom_value=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Optional(
+                CONF_BLUEPRINTS_URL,
+                default=defaults.get(CONF_BLUEPRINTS_URL) or DEFAULT_BLUEPRINTS_URL,
+            ): str,
+            vol.Optional(
+                CONF_ALERTS_URL,
+                default=defaults.get(CONF_ALERTS_URL) or DEFAULT_ALERTS_URL,
+            ): str,
+            vol.Required(
+                CONF_SCAN_INTERVAL,
+                default=int(defaults.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)),
+            ): vol.All(vol.Coerce(int), vol.Range(min=5, max=1440)),
+            vol.Optional(
+                CONF_SPOTIFY_SHOW_URL,
+                default=defaults.get(
+                    CONF_SPOTIFY_SHOW_URL, DEFAULT_SPOTIFY_SHOW_URL
+                ),
+            ): str,
+            vol.Optional(
+                CONF_LOGO_URL,
+                default=defaults.get(CONF_LOGO_URL) or DEFAULT_LOGO_URL,
+            ): str,
+        }
+    )
+
+
+def _build_monitoring_schema(hass: HomeAssistant, defaults: dict) -> vol.Schema:
     mode_choices = [
         selector.SelectOptionDict(value=mode_key, label=label)
         for mode_key, label in BATTERY_PUSH_MODE_LABELS.items()
@@ -108,20 +161,6 @@ def _build_schema(
 
     return vol.Schema(
         {
-            vol.Required(
-                CONF_RSS_URL, default=defaults.get(CONF_RSS_URL, DEFAULT_RSS_URL)
-            ): str,
-            vol.Optional(
-                CONF_NOTIFY_SERVICES,
-                default=current_notify,
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=choices,
-                    multiple=True,
-                    custom_value=True,
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
             vol.Required(
                 CONF_BATTERY_THRESHOLD,
                 default=int(
@@ -166,28 +205,52 @@ def _build_schema(
                 CONF_SILENT_HOURS,
                 default=int(defaults.get(CONF_SILENT_HOURS, DEFAULT_SILENT_HOURS)),
             ): vol.All(vol.Coerce(int), vol.Range(min=1, max=168)),
+        }
+    )
+
+
+def _build_presence_schema(defaults: dict) -> vol.Schema:
+    current_entities = normalize_presence_entities(defaults.get(CONF_PRESENCE_ENTITIES))
+    current_autos = normalize_automation_entities(
+        defaults.get(CONF_PRESENCE_PAUSE_AUTOMATIONS)
+    )
+    return vol.Schema(
+        {
             vol.Optional(
-                CONF_BLUEPRINTS_URL,
-                default=defaults.get(CONF_BLUEPRINTS_URL) or DEFAULT_BLUEPRINTS_URL,
-            ): str,
-            vol.Optional(
-                CONF_ALERTS_URL,
-                default=defaults.get(CONF_ALERTS_URL) or DEFAULT_ALERTS_URL,
-            ): str,
+                CONF_PRESENCE_ENTITIES,
+                default=current_entities,
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["light", "switch"],
+                    multiple=True,
+                )
+            ),
             vol.Required(
-                CONF_SCAN_INTERVAL,
-                default=int(defaults.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)),
-            ): vol.All(vol.Coerce(int), vol.Range(min=5, max=1440)),
-            vol.Optional(
-                CONF_SPOTIFY_SHOW_URL,
-                default=defaults.get(
-                    CONF_SPOTIFY_SHOW_URL, DEFAULT_SPOTIFY_SHOW_URL
+                CONF_PRESENCE_JITTER_MINUTES,
+                default=int(
+                    defaults.get(
+                        CONF_PRESENCE_JITTER_MINUTES, DEFAULT_PRESENCE_JITTER_MINUTES
+                    )
                 ),
-            ): str,
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=30)),
+            vol.Required(
+                CONF_PRESENCE_AUTO_PAUSE_MOTION,
+                default=bool(
+                    defaults.get(
+                        CONF_PRESENCE_AUTO_PAUSE_MOTION,
+                        DEFAULT_PRESENCE_AUTO_PAUSE_MOTION,
+                    )
+                ),
+            ): bool,
             vol.Optional(
-                CONF_LOGO_URL,
-                default=defaults.get(CONF_LOGO_URL) or DEFAULT_LOGO_URL,
-            ): str,
+                CONF_PRESENCE_PAUSE_AUTOMATIONS,
+                default=current_autos,
+            ): selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain=["automation"],
+                    multiple=True,
+                )
+            ),
         }
     )
 
@@ -202,26 +265,14 @@ class WohnsinnigVernetztConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="single_instance_allowed")
 
         if user_input is not None:
-            cleaned = dict(user_input)
-            cleaned[CONF_BATTERY_PUSH_TIME] = parse_hhmm_time(
-                cleaned.get(CONF_BATTERY_PUSH_TIME)
-            ).strftime("%H:%M")
-            cleaned[CONF_BATTERY_EXCLUDED_DEVICES] = normalize_battery_exclusions(
-                [
-                    resolve_exclusion_key(self.hass, item)
-                    for item in normalize_battery_exclusions(
-                        cleaned.get(CONF_BATTERY_EXCLUDED_DEVICES)
-                    )
-                ]
-            )
             return self.async_create_entry(
                 title="Wohnsinnig vernetzt",
-                data=cleaned,
+                data=dict(user_input),
             )
 
         return self.async_show_form(
             step_id="user",
-            data_schema=_build_schema(self.hass, {}, is_initial=True),
+            data_schema=_build_podcast_schema(self.hass, {}, is_initial=True),
         )
 
     @staticmethod
@@ -231,24 +282,9 @@ class WohnsinnigVernetztConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
-    """Optionen nachträglich anpassen."""
+    """Übersichtliches 3-Bereiche-Menü für alle Einstellungen."""
 
-    async def async_step_init(self, user_input=None):
-        if user_input is not None:
-            cleaned = dict(user_input)
-            cleaned[CONF_BATTERY_PUSH_TIME] = parse_hhmm_time(
-                cleaned.get(CONF_BATTERY_PUSH_TIME)
-            ).strftime("%H:%M")
-            cleaned[CONF_BATTERY_EXCLUDED_DEVICES] = normalize_battery_exclusions(
-                [
-                    resolve_exclusion_key(self.hass, item)
-                    for item in normalize_battery_exclusions(
-                        cleaned.get(CONF_BATTERY_EXCLUDED_DEVICES)
-                    )
-                ]
-            )
-            return self.async_create_entry(title="", data=cleaned)
-
+    def _current_merged(self) -> dict:
         current = {**self.config_entry.data, **self.config_entry.options}
         coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
         if coordinator is not None:
@@ -261,8 +297,72 @@ class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
             current[CONF_BATTERY_PUSH_ENABLED] = coordinator.battery_push_enabled
             current[CONF_BATTERY_PUSH_MODE] = coordinator.battery_push_mode
             current[CONF_BATTERY_PUSH_TIME] = coordinator.battery_push_time
+            current[CONF_PRESENCE_ENTITIES] = list(
+                coordinator.presence_manager.entities
+            )
+            current[CONF_PRESENCE_PAUSE_AUTOMATIONS] = list(
+                coordinator.presence_manager.manual_pause_automations
+            )
+            current[CONF_PRESENCE_AUTO_PAUSE_MOTION] = (
+                coordinator.presence_manager.auto_pause_motion
+            )
+            current[CONF_PRESENCE_JITTER_MINUTES] = (
+                coordinator.presence_manager.jitter_minutes
+            )
+        return current
+
+    async def async_step_init(self, user_input=None):
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["presence", "monitoring", "podcast"],
+        )
+
+    async def async_step_presence(self, user_input=None):
+        current = self._current_merged()
+        if user_input is not None:
+            merged = {**current, **user_input}
+            merged[CONF_PRESENCE_ENTITIES] = normalize_presence_entities(
+                merged.get(CONF_PRESENCE_ENTITIES)
+            )
+            merged[CONF_PRESENCE_PAUSE_AUTOMATIONS] = normalize_automation_entities(
+                merged.get(CONF_PRESENCE_PAUSE_AUTOMATIONS)
+            )
+            return self.async_create_entry(title="", data=merged)
 
         return self.async_show_form(
-            step_id="init",
-            data_schema=_build_schema(self.hass, current, is_initial=False),
+            step_id="presence",
+            data_schema=_build_presence_schema(current),
+        )
+
+    async def async_step_monitoring(self, user_input=None):
+        current = self._current_merged()
+        if user_input is not None:
+            merged = {**current, **user_input}
+            merged[CONF_BATTERY_PUSH_TIME] = parse_hhmm_time(
+                merged.get(CONF_BATTERY_PUSH_TIME)
+            ).strftime("%H:%M")
+            merged[CONF_BATTERY_EXCLUDED_DEVICES] = normalize_battery_exclusions(
+                [
+                    resolve_exclusion_key(self.hass, item)
+                    for item in normalize_battery_exclusions(
+                        merged.get(CONF_BATTERY_EXCLUDED_DEVICES)
+                    )
+                ]
+            )
+            return self.async_create_entry(title="", data=merged)
+
+        return self.async_show_form(
+            step_id="monitoring",
+            data_schema=_build_monitoring_schema(self.hass, current),
+        )
+
+    async def async_step_podcast(self, user_input=None):
+        current = self._current_merged()
+        if user_input is not None:
+            merged = {**current, **user_input}
+            return self.async_create_entry(title="", data=merged)
+
+        return self.async_show_form(
+            step_id="podcast",
+            data_schema=_build_podcast_schema(self.hass, current, is_initial=False),
         )

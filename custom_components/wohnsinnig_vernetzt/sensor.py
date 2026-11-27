@@ -28,6 +28,7 @@ async def async_setup_entry(
             WohnsinnigVernetztAlertSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztBatteryCheckSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztSilentSensorsSensor(coordinator, entry.entry_id),
+            WohnsinnigVernetztPresenceStatusSensor(coordinator, entry.entry_id),
         ]
     )
 
@@ -314,4 +315,52 @@ class WohnsinnigVernetztSilentSensorsSensor(WohnsinnigVernetztEntity, SensorEnti
             "geprueft_am": res.get("checked_at", ""),
             "geraete": geraete if geraete else [f"Alle Sensoren aktiv (< {hours} h)"],
             "devices": res.get("devices", []),
+        }
+
+
+class WohnsinnigVernetztPresenceStatusSensor(WohnsinnigVernetztEntity, SensorEntity):
+    """Zeigt Status, Datenquelle, geplante Schaltungen und abgewehrte Bewegungsmelder-Eingriffe."""
+
+    _attr_name = "Anwesenheitssimulation Status"
+    _unrecorded_attributes = frozenset(
+        {"geplante_schaltungen", "upcoming", "ausgewaehlte_geraete", "pausierte_automationen"}
+    )
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "presence_simulation_status")
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.presence_manager.get_status_snapshot()["status"]
+
+    @property
+    def icon(self) -> str:
+        return (
+            "mdi:shield-home"
+            if self.coordinator.presence_manager.enabled
+            else "mdi:home-clock-outline"
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        snap = self.coordinator.presence_manager.get_status_snapshot()
+        return {
+            "aktiv": snap["enabled"],
+            "geraete_anzahl": snap["entities_count"],
+            "ausgewaehlte_geraete": snap["entity_names"],
+            "entity_ids": snap["entities"],
+            "versatz_tage": snap["days_offset"],
+            "zufall_minuten": snap["jitter_minutes"],
+            "datenquelle": snap["data_source"],
+            "verlauf_tage": snap["history_days"],
+            "naechste_schaltung": snap["next_event"],
+            "geplante_anzahl": snap["scheduled_count"],
+            "geplante_schaltungen": snap["upcoming_formatted"],
+            "upcoming": snap["upcoming"],
+            "pausierte_automationen": snap["paused_automation_names"],
+            "abgewehrte_eingriffe": snap["blocked_interferences"],
+            "letzter_eingriff": snap["last_interference"],
+            "letzte_schaltung": snap["last_action"],
         }

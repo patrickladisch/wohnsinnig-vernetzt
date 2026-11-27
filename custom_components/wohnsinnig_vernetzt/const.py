@@ -1,7 +1,7 @@
 """Konstanten für Wohnsinnig vernetzt."""
 
 DOMAIN = "wohnsinnig_vernetzt"
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 
 DEFAULT_RSS_URL = "https://anchor.fm/s/111a8abd0/podcast/rss"
 DEFAULT_BLUEPRINTS_URL = "https://www.wohnsinnigvernetzt.de/"
@@ -15,6 +15,14 @@ DEFAULT_BATTERY_PUSH_ENABLED = True
 DEFAULT_BATTERY_PUSH_MODE = "scheduled"
 DEFAULT_BATTERY_PUSH_TIME = "18:00"
 DEFAULT_SILENT_HOURS = 24
+
+# Anwesenheitssimulation
+DEFAULT_PRESENCE_DAYS_OFFSET = 14
+DEFAULT_PRESENCE_JITTER_MINUTES = 7
+DEFAULT_PRESENCE_AUTO_PAUSE_MOTION = True
+PRESENCE_HISTORY_KEEP_DAYS = 22
+PRESENCE_HISTORY_STORAGE_KEY = f"{DOMAIN}_presence_history"
+PRESENCE_HISTORY_STORAGE_VERSION = 1
 
 BATTERY_PUSH_MODE_SCHEDULED = "scheduled"
 BATTERY_PUSH_MODE_IMMEDIATE = "immediate"
@@ -39,6 +47,11 @@ CONF_BATTERY_PUSH_MODE = "battery_push_mode"
 CONF_BATTERY_PUSH_TIME = "battery_push_time"
 CONF_SILENT_HOURS = "silent_hours"
 
+CONF_PRESENCE_ENTITIES = "presence_entities"
+CONF_PRESENCE_PAUSE_AUTOMATIONS = "presence_pause_automations"
+CONF_PRESENCE_AUTO_PAUSE_MOTION = "presence_auto_pause_motion"
+CONF_PRESENCE_JITTER_MINUTES = "presence_jitter_minutes"
+
 DEFAULT_NOTIFY_SERVICES = ["persistent_notification.create"]
 DEFAULT_SCAN_INTERVAL = 30  # Minuten
 
@@ -57,6 +70,7 @@ EVENT_ALERT_RECEIVED = f"{DOMAIN}_alert"
 EVENT_BATTERY_CHECK_COMPLETED = f"{DOMAIN}_battery_check_completed"
 EVENT_BATTERY_PUSH_SENT = f"{DOMAIN}_battery_push_sent"
 EVENT_SILENT_SENSORS_COMPLETED = f"{DOMAIN}_silent_sensors_completed"
+EVENT_PRESENCE_INTERFERENCE_BLOCKED = f"{DOMAIN}_presence_interference_blocked"
 SIGNAL_NEW_EPISODE = f"{DOMAIN}_signal_new_episode"
 
 # Interaktive Companion-App-Push-Aktionen

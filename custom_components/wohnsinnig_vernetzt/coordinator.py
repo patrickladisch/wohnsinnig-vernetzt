@@ -46,6 +46,8 @@ from .const import (
     DEFAULT_BATTERY_RESET_MIN,
     DEFAULT_BATTERY_THRESHOLD,
     DEFAULT_BLUEPRINTS_URL,
+    DEFAULT_PRESENCE_AUTO_PAUSE_MOTION,
+    DEFAULT_PRESENCE_JITTER_MINUTES,
     DEFAULT_SILENT_HOURS,
     DOMAIN,
     EVENT_ALERT_RECEIVED,
@@ -67,6 +69,11 @@ from .battery_check import (
     run_battery_check,
 )
 from .silent_sensors import run_silent_sensors_check
+from .presence_simulation import (
+    PresenceSimulationManager,
+    normalize_automation_entities,
+    normalize_presence_entities,
+)
 
 _LOGGER = logging.getLogger(__name__)
 ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd"
@@ -266,6 +273,10 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         battery_push_enabled: bool = DEFAULT_BATTERY_PUSH_ENABLED,
         battery_push_mode: str = DEFAULT_BATTERY_PUSH_MODE,
         battery_push_time: str = DEFAULT_BATTERY_PUSH_TIME,
+        presence_entities: list[str] | None = None,
+        presence_pause_automations: list[str] | None = None,
+        presence_auto_pause_motion: bool = DEFAULT_PRESENCE_AUTO_PAUSE_MOTION,
+        presence_jitter_minutes: int = DEFAULT_PRESENCE_JITTER_MINUTES,
         default_target: str = BROWSER_TARGET,
     ) -> None:
         super().__init__(
@@ -349,6 +360,18 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             "geraete": [],
             "devices": [],
         }
+        self._persisted_presence_enabled: bool = False
+        self._persisted_paused_automations: list[str] = []
+        self.presence_manager = PresenceSimulationManager(
+            hass=hass,
+            on_update=self.async_update_listeners,
+            entities=normalize_presence_entities(presence_entities),
+            manual_pause_automations=normalize_automation_entities(
+                presence_pause_automations
+            ),
+            auto_pause_motion=presence_auto_pause_motion,
+            jitter_minutes=presence_jitter_minutes,
+        )
         self._state_loaded: bool = False
 
     async def _async_load_state(self) -> None:
@@ -424,6 +447,13 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             ):
                 self.battery_push_time = parse_hhmm_time(stored["battery_push_time"]).strftime("%H:%M")
 
+            if isinstance(stored.get("presence_enabled"), bool):
+                self._persisted_presence_enabled = stored["presence_enabled"]
+            if isinstance(stored.get("presence_paused_automations"), list):
+                self._persisted_paused_automations = normalize_automation_entities(
+                    stored["presence_paused_automations"]
+                )
+
         self._state_loaded = True
 
     async def _async_save_state(self) -> None:
@@ -454,8 +484,35 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "last_config_battery_push_mode": self._config_battery_push_mode,
                 "battery_push_time": self.battery_push_time,
                 "last_config_battery_push_time": self._config_battery_push_time,
+                "presence_enabled": self.presence_manager.enabled,
+                "presence_paused_automations": list(
+                    self.presence_manager.paused_automations
+                ),
             }
         )
+
+    async def async_init_presence_simulation(self) -> None:
+        """Initialisiert Verlauf, Listener und stellt ggf. eine aktive Simulation wieder her."""
+        await self._async_load_state()
+        await self.presence_manager.async_initialize(
+            was_enabled=self._persisted_presence_enabled,
+            persisted_paused_automations=self._persisted_paused_automations,
+        )
+        await self._async_save_state()
+        self.async_update_listeners()
+
+    async def async_set_presence_simulation_enabled(self, enabled: bool) -> None:
+        """Hauptschalter für die Anwesenheitssimulation."""
+        if enabled:
+            await self.presence_manager.async_turn_on(is_restore=False)
+        else:
+            await self.presence_manager.async_turn_off()
+        await self._async_save_state()
+        self.async_update_listeners()
+
+    async def async_shutdown_presence(self) -> None:
+        """Beendet Simulationstimer und speichert ausstehenden Verlauf sauber."""
+        await self.presence_manager.async_shutdown()
 
     def get_battery_reset_threshold(self) -> int:
         """Ab diesem Prozentwert gilt eine Batterie als gewechselt (Anti-Spam-Hysterese)."""

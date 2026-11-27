@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.3.0
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.4.0
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -2016,5 +2016,429 @@ if (!window.customCards.some((c) => c.type === "wohnsinnig-vernetzt-silent-senso
     type: "wohnsinnig-vernetzt-silent-sensors-card",
     name: "Wohnsinnig vernetzt Stille Sensoren",
     description: "Erkennt stumm eingefrorene Sensoren (Zigbee-Freeze) auf einen Klick.",
+  });
+}
+class WohnsinnigVernetztPresenceCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = {
+      title: "Anwesenheitssimulation",
+      show_schedule_default: false,
+    };
+    this._open = false;
+    this._busy = false;
+    this._errorMsg = "";
+    this._lastKey = null;
+  }
+
+  static getStubConfig() {
+    return {
+      title: "Anwesenheitssimulation",
+      show_schedule_default: false,
+    };
+  }
+
+  connectedCallback() {
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    this._render();
+  }
+
+  setConfig(config) {
+    this._config = {
+      title: "Anwesenheitssimulation",
+      show_schedule_default: false,
+      ...(config || {}),
+    };
+    this._open = Boolean(this._config.show_schedule_default);
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    this._render();
+  }
+
+  _findEntities(hass) {
+    if (!hass || !hass.states) return { sw: null, sensor: null };
+    const sw =
+      hass.states["switch.wohnsinnig_vernetzt_anwesenheitssimulation"] ||
+      Object.values(hass.states).find(
+        (s) =>
+          s.entity_id.startsWith("switch.wohnsinnig_vernetzt") &&
+          s.attributes &&
+          "abgewehrte_eingriffe" in s.attributes
+      );
+    const sensor =
+      hass.states["sensor.wohnsinnig_vernetzt_anwesenheitssimulation_status"] ||
+      Object.values(hass.states).find(
+        (s) =>
+          s.entity_id.startsWith("sensor.wohnsinnig_vernetzt") &&
+          s.attributes &&
+          "geplante_schaltungen" in s.attributes
+      );
+    return { sw, sensor };
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    const { sw, sensor } = this._findEntities(hass);
+    const key = [
+      sw ? sw.state : "",
+      sensor ? sensor.state : "",
+      sensor?.attributes?.geplante_anzahl ?? "",
+      sensor?.attributes?.abgewehrte_eingriffe ?? "",
+      sensor?.attributes?.geraete_anzahl ?? "",
+    ].join("|");
+    if (key !== this._lastKey) {
+      this._lastKey = key;
+      this._render();
+    }
+  }
+
+  getCardSize() {
+    return this._open ? 6 : 3;
+  }
+
+  async _toggleMaster(ev) {
+    if (ev) ev.stopPropagation();
+    if (!this._hass || this._busy) return;
+    const { sw } = this._findEntities(this._hass);
+    if (!sw) return;
+
+    this._busy = true;
+    this._errorMsg = "";
+    this._render();
+
+    try {
+      const targetSvc = sw.state === "on" ? "turn_off" : "turn_on";
+      await this._hass.callService("switch", targetSvc, {
+        entity_id: sw.entity_id,
+      });
+    } catch (err) {
+      this._errorMsg =
+        err?.message || "Bitte zuerst Lampen/Schalter in den Optionen auswählen.";
+    } finally {
+      this._busy = false;
+      this._render();
+    }
+  }
+
+  _render() {
+    if (!this.shadowRoot || this.shadowRoot.innerHTML === "") return;
+    const { sw, sensor } = this._findEntities(this._hass);
+
+    const titleEl = this.shadowRoot.getElementById("ps-title");
+    const subEl = this.shadowRoot.getElementById("ps-sub");
+    const toggleBtn = this.shadowRoot.getElementById("ps-toggle");
+    const errEl = this.shadowRoot.getElementById("ps-error");
+    const statsEl = this.shadowRoot.getElementById("ps-stats");
+    const listToggle = this.shadowRoot.getElementById("ps-list-toggle");
+    const listWrap = this.shadowRoot.getElementById("ps-list-wrap");
+    const listEl = this.shadowRoot.getElementById("ps-list");
+
+    const isOn = sw?.state === "on";
+    const attrs = sensor?.attributes || {};
+    const devCount = attrs.geraete_anzahl ?? sw?.attributes?.geraete_anzahl ?? 0;
+    const pausedCount = Array.isArray(attrs.pausierte_automationen)
+      ? attrs.pausierte_automationen.length
+      : 0;
+    const blockedCount = attrs.abgewehrte_eingriffe ?? 0;
+    const jitterMin = attrs.zufall_minuten ?? 7;
+    const dataSource = attrs.datenquelle || "14-Tage-Verlauf";
+    const upcoming = Array.isArray(attrs.upcoming) ? attrs.upcoming : [];
+
+    if (titleEl) titleEl.textContent = this._config.title || "Anwesenheitssimulation";
+
+    if (subEl) {
+      if (devCount === 0) {
+        subEl.textContent = "Noch keine Lampen/Schalter in den Optionen gewählt";
+      } else if (isOn) {
+        subEl.textContent = `${dataSource} • ±${jitterMin} Min`;
+      } else {
+        subEl.textContent = `${devCount} ${devCount === 1 ? "Gerät" : "Geräte"} bereit • Verlauf: ${attrs.verlauf_tage ?? 0} Tage`;
+      }
+    }
+
+    if (toggleBtn) {
+      toggleBtn.disabled = this._busy || !sw;
+      toggleBtn.className = `ps-master ${isOn ? "on" : "off"}`;
+      toggleBtn.textContent = this._busy ? "…" : isOn ? "AKTIV" : "AUS";
+    }
+
+    if (errEl) {
+      errEl.textContent = this._errorMsg;
+      errEl.style.display = this._errorMsg ? "block" : "none";
+    }
+
+    if (statsEl) {
+      if (isOn) {
+        statsEl.style.display = "flex";
+        statsEl.innerHTML = `
+          <span class="ps-pill">💡 ${devCount} Geräte</span>
+          <span class="ps-pill">🛡️ ${pausedCount} Autom. pausiert</span>
+          <span class="ps-pill">🚫 ${blockedCount} abgewehrt</span>
+        `;
+      } else {
+        statsEl.style.display = "none";
+      }
+    }
+
+    if (listToggle) {
+      listToggle.style.display = isOn ? "block" : "none";
+      listToggle.textContent = this._open
+        ? `Geplante Schaltungen ausblenden (${upcoming.length})`
+        : `Nächste geplante Schaltungen (${upcoming.length})`;
+    }
+
+    if (listWrap) {
+      listWrap.style.display = isOn && this._open ? "block" : "none";
+    }
+
+    if (listEl) {
+      listEl.innerHTML = "";
+      if (!upcoming.length) {
+        const empty = document.createElement("div");
+        empty.className = "ps-empty";
+        empty.textContent =
+          "Keine weiteren Schaltvorgänge in den nächsten 24 Stunden geplant.";
+        listEl.appendChild(empty);
+      } else {
+        upcoming.forEach((ev) => {
+          const row = document.createElement("div");
+          row.className = "ps-row";
+
+          const left = document.createElement("div");
+          left.className = "ps-row-left";
+          const name = document.createElement("div");
+          name.className = "ps-row-name";
+          name.textContent = ev.name;
+          const meta = document.createElement("div");
+          meta.className = "ps-row-meta";
+          const sign = ev.offset_min >= 0 ? "+" : "";
+          meta.textContent = `${ev.time} (${sign}${ev.offset_min} Min)`;
+          left.appendChild(name);
+          left.appendChild(meta);
+
+          const badge = document.createElement("span");
+          badge.className = `ps-state ${ev.state === "on" ? "on" : "off"}`;
+          badge.textContent = ev.state_de || (ev.state === "on" ? "AN" : "AUS");
+
+          row.appendChild(left);
+          row.appendChild(badge);
+          listEl.appendChild(row);
+        });
+      }
+    }
+  }
+
+  _renderShell() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        ha-card {
+          padding: 12px 14px;
+          color: var(--primary-text-color);
+        }
+        .ps-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+        }
+        .ps-left {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+          flex: 1;
+        }
+        .ps-icon {
+          width: 38px;
+          height: 38px;
+          border-radius: 10px;
+          background: var(--secondary-background-color);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 19px;
+          flex-shrink: 0;
+        }
+        .ps-titles {
+          min-width: 0;
+          flex: 1;
+        }
+        .ps-title {
+          font-size: 14px;
+          font-weight: 600;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .ps-sub {
+          font-size: 11px;
+          color: var(--secondary-text-color);
+          margin-top: 2px;
+        }
+        .ps-master {
+          border: none;
+          cursor: pointer;
+          font-family: inherit;
+          font-size: 12px;
+          font-weight: 700;
+          padding: 7px 14px;
+          border-radius: 999px;
+          flex-shrink: 0;
+          transition: opacity 0.15s;
+        }
+        .ps-master.on {
+          background: var(--primary-color);
+          color: var(--text-primary-color, #fff);
+        }
+        .ps-master.off {
+          background: var(--secondary-background-color);
+          color: var(--secondary-text-color);
+          border: 1px solid var(--divider-color);
+        }
+        .ps-master:disabled {
+          opacity: 0.55;
+          cursor: default;
+        }
+        .ps-error {
+          display: none;
+          margin-top: 8px;
+          padding: 7px 10px;
+          border-radius: 8px;
+          font-size: 12px;
+          color: var(--error-color, #db4437);
+          background: rgba(219, 68, 55, 0.12);
+        }
+        .ps-stats {
+          display: none;
+          flex-wrap: wrap;
+          gap: 6px;
+          margin-top: 10px;
+        }
+        .ps-pill {
+          font-size: 11px;
+          padding: 3px 8px;
+          border-radius: 999px;
+          background: var(--secondary-background-color);
+          color: var(--secondary-text-color);
+        }
+        .ps-list-toggle {
+          display: none;
+          width: 100%;
+          margin-top: 10px;
+          padding-top: 8px;
+          border: none;
+          border-top: 1px solid var(--divider-color);
+          background: none;
+          color: var(--secondary-text-color);
+          font-family: inherit;
+          font-size: 12px;
+          cursor: pointer;
+          text-align: center;
+        }
+        .ps-list-toggle:hover {
+          color: var(--primary-color);
+        }
+        .ps-list-wrap {
+          display: none;
+          margin-top: 6px;
+        }
+        .ps-list {
+          max-height: 240px;
+          overflow-y: auto;
+        }
+        .ps-empty {
+          font-size: 12px;
+          color: var(--secondary-text-color);
+          text-align: center;
+          padding: 8px 4px;
+        }
+        .ps-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          padding: 7px 4px;
+          border-bottom: 1px solid var(--divider-color);
+        }
+        .ps-row:last-child {
+          border-bottom: none;
+        }
+        .ps-row-left {
+          min-width: 0;
+          flex: 1;
+        }
+        .ps-row-name {
+          font-size: 13px;
+          font-weight: 500;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .ps-row-meta {
+          font-size: 11px;
+          color: var(--secondary-text-color);
+          margin-top: 2px;
+        }
+        .ps-state {
+          font-size: 11px;
+          font-weight: 700;
+          padding: 2px 8px;
+          border-radius: 999px;
+          flex-shrink: 0;
+        }
+        .ps-state.on {
+          color: var(--warning-color, #ff9800);
+          background: rgba(255, 152, 0, 0.16);
+        }
+        .ps-state.off {
+          color: var(--secondary-text-color);
+          background: var(--secondary-background-color);
+        }
+      </style>
+      <ha-card>
+        <div class="ps-header">
+          <div class="ps-left">
+            <div class="ps-icon">🏠</div>
+            <div class="ps-titles">
+              <div id="ps-title" class="ps-title">Anwesenheitssimulation</div>
+              <div id="ps-sub" class="ps-sub"></div>
+            </div>
+          </div>
+          <button id="ps-toggle" class="ps-master off" type="button">AUS</button>
+        </div>
+        <div id="ps-error" class="ps-error"></div>
+        <div id="ps-stats" class="ps-stats"></div>
+        <button id="ps-list-toggle" class="ps-list-toggle" type="button"></button>
+        <div id="ps-list-wrap" class="ps-list-wrap">
+          <div id="ps-list" class="ps-list"></div>
+        </div>
+      </ha-card>
+    `;
+
+    this.shadowRoot.getElementById("ps-toggle").addEventListener("click", (ev) => {
+      this._toggleMaster(ev);
+    });
+    this.shadowRoot.getElementById("ps-list-toggle").addEventListener("click", () => {
+      this._open = !this._open;
+      this._render();
+    });
+  }
+}
+
+if (!customElements.get("wohnsinnig-vernetzt-presence-card")) {
+  customElements.define("wohnsinnig-vernetzt-presence-card", WohnsinnigVernetztPresenceCard);
+}
+if (!window.customCards.some((c) => c.type === "wohnsinnig-vernetzt-presence-card")) {
+  window.customCards.push({
+    type: "wohnsinnig-vernetzt-presence-card",
+    name: "Wohnsinnig vernetzt Anwesenheitssimulation",
+    description: "Hauptschalter, Schutz-Status & geplante Schaltungen (14-Tage-Verlauf ± 7 Min).",
   });
 }
