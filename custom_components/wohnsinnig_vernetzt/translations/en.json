@@ -77,7 +77,8 @@
           "wakeup_auto_pause": "Automatically disable automations affecting these lights",
           "wakeup_pause_automations": "Additional automations to pause during dimming (optional)",
           "wakeup_sunrise_color": "Smooth sunrise color temperature (warm white → daylight)",
-          "wakeup_alarm_entity": "📱 Phone Alarm (Next Alarm Sensor – optional)"
+          "wakeup_alarm_entity": "📱 Phone Alarm (Next Alarm Sensor – optional)",
+          "wakeup_auto_off_minutes": "Auto-off after reaching 100% brightness (minutes, 0 = disabled)"
         }
       }
     }

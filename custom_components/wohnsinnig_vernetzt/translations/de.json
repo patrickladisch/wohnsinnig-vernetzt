@@ -77,7 +77,8 @@
           "wakeup_auto_pause": "Betroffene Lampen-Automationen während des Dimmens deaktivieren",
           "wakeup_pause_automations": "Zusätzliche Automationen während des Dimmens pausieren (optional)",
           "wakeup_sunrise_color": "Sanfte Sonnenaufgangs-Farbtemperatur (Warmweiß → Tageslicht)",
-          "wakeup_alarm_entity": "📱 Handy-Wecker (Next Alarm Sensor – optional)"
+          "wakeup_alarm_entity": "📱 Handy-Wecker (Next Alarm Sensor – optional)",
+          "wakeup_auto_off_minutes": "Auto-Aus nach 100 % Helligkeit (Minuten, 0 = deaktiviert)"
         }
       }
     }

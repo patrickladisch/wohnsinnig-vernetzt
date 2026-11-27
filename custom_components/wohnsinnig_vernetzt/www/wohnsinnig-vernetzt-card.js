@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.7.0
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.8.0
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -3226,6 +3226,9 @@ class WohnsinnigVernetztWakeUpCard extends HTMLElement {
       sensor?.attributes?.lampen_anzahl ?? "",
       sensor?.attributes?.handy_wecker_entity ?? "",
       sensor?.attributes?.handy_wecker_zeit ?? "",
+      sensor?.attributes?.auto_aus_minuten ?? "",
+      sensor?.attributes?.auto_aus_aktiv ?? "",
+      sensor?.attributes?.auto_aus_um ?? "",
     ].join("|");
     if (key !== this._lastKey) {
       this._lastKey = key;
@@ -3262,7 +3265,7 @@ class WohnsinnigVernetztWakeUpCard extends HTMLElement {
     if (ev) ev.stopPropagation();
     if (!this._hass || this._busy) return;
     const { sensor } = this._findEntities(this._hass);
-    const running = Boolean(sensor?.attributes?.laeuft);
+    const running = Boolean(sensor?.attributes?.laeuft) || Boolean(sensor?.attributes?.auto_aus_aktiv);
 
     this._busy = true;
     this._errorMsg = "";
@@ -3311,12 +3314,17 @@ class WohnsinnigVernetztWakeUpCard extends HTMLElement {
     const alarmEntity = attrs.handy_wecker_entity || "";
     const alarmName = attrs.handy_wecker_name || "Handy";
     const alarmTime = attrs.handy_wecker_zeit || "";
+    const autoOffMin = Number(attrs.auto_aus_minuten || 0);
+    const autoOffActive = Boolean(attrs.auto_aus_aktiv);
+    const autoOffAt = attrs.auto_aus_um || "";
 
     if (subEl) {
       if (lampCount === 0) {
         subEl.textContent = "Noch keine Lampen gewählt – tippe auf ⚙️";
       } else if (running) {
         subEl.textContent = `Sonnenaufgang läuft (${startHhmm} → ${endHhmm})`;
+      } else if (autoOffActive && autoOffAt) {
+        subEl.textContent = `100 % erreicht – Lampen schalten um ${autoOffAt} automatisch aus`;
       } else if (alarmEntity) {
         if (alarmTime) {
           subEl.textContent = `📱 ${alarmName}: ${alarmTime} → Dimmt ${startHhmm}–${endHhmm}`;
@@ -3346,18 +3354,28 @@ class WohnsinnigVernetztWakeUpCard extends HTMLElement {
       const sourcePill = alarmEntity
         ? `<span class="wu-pill accent">📱 ${alarmName}${alarmTime ? ` (${alarmTime.split(" ").pop()})` : " · kein Wecker"}</span>`
         : `<span class="wu-pill">🕒 ${attrs.modus === "start_at" ? `Start ${attrs.uhrzeit || startHhmm}` : `100 % um ${attrs.uhrzeit || endHhmm}`}</span>`;
+      const autoOffPill = autoOffActive && autoOffAt
+        ? `<span class="wu-pill accent">⏲️ Auto-Aus um ${autoOffAt}</span>`
+        : autoOffMin > 0
+        ? `<span class="wu-pill">⏲️ Auto-Aus: ${autoOffMin} Min</span>`
+        : "";
       pillsEl.innerHTML = `
         ${sourcePill}
         <span class="wu-pill">💡 ${lampCount} ${lampCount === 1 ? "Lampe" : "Lampen"}</span>
         <span class="wu-pill">⏱️ ${durMin} Min</span>
+        ${autoOffPill}
         ${running ? `<span class="wu-pill">🛡️ ${pausedCnt} Autom. pausiert</span>` : ""}
       `;
     }
 
     if (runBtn) {
       runBtn.disabled = this._busy || lampCount === 0;
-      runBtn.className = `wu-run ${running ? "stop" : ""}`;
-      runBtn.textContent = running ? "⏹ Sonnenaufgang abbrechen" : "🌅 Jetzt starten";
+      runBtn.className = `wu-run ${running || autoOffActive ? "stop" : ""}`;
+      runBtn.textContent = running
+        ? "⏹ Sonnenaufgang abbrechen"
+        : autoOffActive
+        ? `⏹ Auto-Aus (${autoOffAt}) abbrechen`
+        : "🌅 Jetzt starten";
     }
 
     if (errEl) {
@@ -3460,6 +3478,7 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
     this._mode = "reach_100";
     this._time = "07:00";
     this._duration = 30;
+    this._autoOffMinutes = 0;
     this._days = "daily";
     this._autoPause = true;
     this._sunriseColor = true;
@@ -3522,6 +3541,7 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
       this._mode = data.wakeup_mode || "reach_100";
       this._time = data.wakeup_time || "07:00";
       this._duration = Number.isFinite(data.wakeup_duration) ? data.wakeup_duration : 30;
+      this._autoOffMinutes = Number.isFinite(data.wakeup_auto_off_minutes) ? data.wakeup_auto_off_minutes : 0;
       this._days = data.wakeup_days || "daily";
       this._autoPause = data.wakeup_auto_pause !== false;
       this._sunriseColor = data.wakeup_sunrise_color !== false;
@@ -3551,6 +3571,7 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
         wakeup_mode: this._mode,
         wakeup_time: this._time,
         wakeup_duration: this._duration,
+        wakeup_auto_off_minutes: this._autoOffMinutes,
         wakeup_days: this._days,
         wakeup_auto_pause: this._autoPause,
         wakeup_pause_automations: Array.from(this._selectedAutomations),
@@ -3712,6 +3733,7 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
       this.shadowRoot.getElementById("wud-mode").value = this._mode;
       this.shadowRoot.getElementById("wud-time").value = this._time;
       this.shadowRoot.getElementById("wud-dur").value = String(this._duration);
+      this.shadowRoot.getElementById("wud-autooff").value = String(this._autoOffMinutes);
       this.shadowRoot.getElementById("wud-days").value = this._days;
       this.shadowRoot.getElementById("wud-autopause").checked = this._autoPause;
       this.shadowRoot.getElementById("wud-color").checked = this._sunriseColor;
@@ -3804,6 +3826,10 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
                   <label for="wud-dur">Dimm-Dauer (Minuten)</label>
                   <input id="wud-dur" type="number" min="1" max="120" value="30" />
                 </div>
+                <div class="field">
+                  <label for="wud-autooff">Auto-Aus nach 100 % (Min, 0 = aus)</label>
+                  <input id="wud-autooff" type="number" min="0" max="180" value="0" />
+                </div>
                 <div id="wud-time-field" class="field">
                   <label for="wud-time">Feste Uhrzeit (Fallback)</label>
                   <input id="wud-time" type="time" value="07:00" />
@@ -3885,6 +3911,10 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
     this.shadowRoot.getElementById("wud-dur").addEventListener("change", (ev) => {
       const val = parseInt(ev.target.value, 10);
       this._duration = Number.isFinite(val) ? Math.max(1, Math.min(120, val)) : 30;
+    });
+    this.shadowRoot.getElementById("wud-autooff").addEventListener("change", (ev) => {
+      const val = parseInt(ev.target.value, 10);
+      this._autoOffMinutes = Number.isFinite(val) ? Math.max(0, Math.min(180, val)) : 0;
     });
     this.shadowRoot.getElementById("wud-days").addEventListener("change", (ev) => {
       this._days = ev.target.value;

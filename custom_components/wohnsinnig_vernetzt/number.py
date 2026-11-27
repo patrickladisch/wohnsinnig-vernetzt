@@ -25,6 +25,7 @@ async def async_setup_entry(
             WohnsinnigVernetztBatteryThresholdNumber(coordinator, entry.entry_id),
             WohnsinnigVernetztSilentHoursNumber(coordinator, entry.entry_id),
             WohnsinnigVernetztWakeUpDurationNumber(coordinator, entry.entry_id),
+            WohnsinnigVernetztWakeUpAutoOffNumber(coordinator, entry.entry_id),
         ]
     )
 
@@ -105,3 +106,31 @@ class WohnsinnigVernetztWakeUpDurationNumber(WohnsinnigVernetztEntity, NumberEnt
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.wakeup_manager.async_set_duration(int(round(value)))
+
+
+class WohnsinnigVernetztWakeUpAutoOffNumber(WohnsinnigVernetztEntity, NumberEntity):
+    """Optionale Auto-Aus-Zeit nach Erreichen von 100 % Helligkeit (0 = deaktiviert)."""
+
+    _device_section = DEVICE_SECTION_WAKEUP
+    _attr_name = "Auto-Aus nach 100 %"
+    _attr_icon = "mdi:lightbulb-auto-outline"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_native_min_value = 0
+    _attr_native_max_value = 180
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_mode = NumberMode.BOX
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "wakeup_auto_off_minutes")
+
+    @property
+    def native_value(self) -> float:
+        return float(self.coordinator.wakeup_manager.auto_off_minutes)
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.coordinator.wakeup_manager.async_set_auto_off_minutes(
+            int(round(value))
+        )

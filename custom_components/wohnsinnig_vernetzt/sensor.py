@@ -398,6 +398,8 @@ class WohnsinnigVernetztWakeUpStatusSensor(WohnsinnigVernetztEntity, SensorEntit
         wm = self.coordinator.wakeup_manager
         if wm.is_running:
             return "mdi:weather-sunny"
+        if wm.auto_off_at_dt is not None:
+            return "mdi:timer-off-outline"
         return "mdi:weather-sunset-up" if wm.enabled else "mdi:weather-night"
 
     @property
@@ -419,6 +421,9 @@ class WohnsinnigVernetztWakeUpStatusSensor(WohnsinnigVernetztEntity, SensorEntit
             "zielzeit": snap["end_hhmm"],
             "naechster_start": snap["next_start"],
             "dauer_minuten": snap["duration_minutes"],
+            "auto_aus_minuten": snap["auto_off_minutes"],
+            "auto_aus_aktiv": snap["auto_off_pending"],
+            "auto_aus_um": snap["auto_off_hhmm"],
             "wochentage": snap["weekdays"],
             "fortschritt_prozent": snap["progress_percent"],
             "helligkeit_prozent": snap["brightness_percent"],

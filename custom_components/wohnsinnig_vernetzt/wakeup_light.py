@@ -21,6 +21,7 @@ from homeassistant.helpers.event import (
 
 from .const import (
     DEFAULT_WAKEUP_ALARM_ENTITY,
+    DEFAULT_WAKEUP_AUTO_OFF_MINUTES,
     DEFAULT_WAKEUP_AUTO_PAUSE,
     DEFAULT_WAKEUP_DAYS,
     DEFAULT_WAKEUP_DURATION,
@@ -28,6 +29,7 @@ from .const import (
     DEFAULT_WAKEUP_SUNRISE_COLOR,
     DEFAULT_WAKEUP_TIME,
     DOMAIN,
+    EVENT_WAKEUP_AUTO_OFF,
     EVENT_WAKEUP_CANCELLED,
     EVENT_WAKEUP_COMPLETED,
     EVENT_WAKEUP_STARTED,
@@ -547,6 +549,7 @@ class WakeUpLightManager:
         mode: str = DEFAULT_WAKEUP_MODE,
         wakeup_time: str = DEFAULT_WAKEUP_TIME,
         duration_minutes: int = DEFAULT_WAKEUP_DURATION,
+        auto_off_minutes: int = DEFAULT_WAKEUP_AUTO_OFF_MINUTES,
         weekdays: str = DEFAULT_WAKEUP_DAYS,
         auto_pause: bool = DEFAULT_WAKEUP_AUTO_PAUSE,
         manual_pause_automations: list[str] | None = None,
@@ -565,6 +568,7 @@ class WakeUpLightManager:
         )
         self.wakeup_time: str = parse_wakeup_time(wakeup_time).strftime("%H:%M")
         self.duration_minutes: int = max(1, min(120, int(duration_minutes or DEFAULT_WAKEUP_DURATION)))
+        self.auto_off_minutes: int = max(0, min(180, int(auto_off_minutes or 0)))
         self.weekdays: str = (
             weekdays
             if weekdays in (WAKEUP_DAYS_DAILY, WAKEUP_DAYS_WORKDAYS, WAKEUP_DAYS_WEEKEND)
@@ -586,12 +590,14 @@ class WakeUpLightManager:
         self.next_alarm_dt: datetime | None = None
         self.active_start_dt: datetime | None = None
         self.active_end_dt: datetime | None = None
+        self.auto_off_at_dt: datetime | None = None
         self.last_run_info: str = ""
         self.paused_automations: list[str] = []
 
         self._handled_alarm_ts: int | None = None
         self._active_alarm_ts: int | None = None
         self._unsub_schedule: CALLBACK_TYPE | None = None
+        self._unsub_auto_off: CALLBACK_TYPE | None = None
         self._unsub_alarm_listener: CALLBACK_TYPE | None = None
         self._dim_task: asyncio.Task | None = None
 
@@ -742,7 +748,7 @@ class WakeUpLightManager:
                 "Bitte wähle zuerst unter „Konfiguration öffnen“ mindestens eine Lampe aus."
             )
         self.enabled = bool(enabled)
-        if not self.enabled and self.is_running:
+        if not self.enabled and (self.is_running or self.auto_off_at_dt is not None):
             await self.async_stop(cancelled=True)
         self._schedule_next(allow_immediate_start=self.enabled)
         await self._persist()
@@ -774,6 +780,65 @@ class WakeUpLightManager:
     async def async_set_duration(self, minutes: int) -> None:
         self.duration_minutes = max(1, min(120, int(minutes)))
         self._schedule_next(allow_immediate_start=False)
+        await self._persist()
+        self._on_update()
+
+    def _cancel_auto_off(self) -> None:
+        if self._unsub_auto_off is not None:
+            self._unsub_auto_off()
+            self._unsub_auto_off = None
+        self.auto_off_at_dt = None
+
+    def _schedule_auto_off(self, minutes: int) -> None:
+        """Plant das automatische Ausschalten der Wake-Up-Lampen nach Erreichen von 100 %."""
+        self._cancel_auto_off()
+        delay_min = max(0, min(180, int(minutes)))
+        if delay_min <= 0 or not self.entities:
+            return
+
+        off_local = _local_now() + timedelta(minutes=delay_min)
+        self.auto_off_at_dt = off_local
+
+        async def _execute_auto_off(_now: datetime) -> None:
+            self._unsub_auto_off = None
+            self.auto_off_at_dt = None
+            turned_off: list[str] = []
+            for eid in self.entities:
+                st = self.hass.states.get(eid)
+                if st is not None and st.state != "on":
+                    continue
+                attrs = (st.attributes or {}) if st is not None else {}
+                supported_modes = set(attrs.get("supported_color_modes") or [])
+                svc_data: dict[str, Any] = {"entity_id": eid}
+                if supported_modes != {"onoff"}:
+                    svc_data["transition"] = 3
+                try:
+                    await self.hass.services.async_call(
+                        "light", "turn_off", svc_data, blocking=False
+                    )
+                    turned_off.append(eid)
+                except Exception as err:
+                    _LOGGER.warning("Wake-Up Light Auto-Aus %s Fehler: %s", eid, err)
+
+            self.last_run_info = f"Auto-Aus um {_local_now().strftime('%H:%M')}"
+            self.hass.bus.async_fire(
+                EVENT_WAKEUP_AUTO_OFF,
+                {
+                    "entities": turned_off,
+                    "auto_off_minutes": delay_min,
+                },
+            )
+            self._on_update()
+
+        self._unsub_auto_off = async_track_point_in_utc_time(
+            self.hass, _execute_auto_off, _as_utc(off_local)
+        )
+
+    async def async_set_auto_off_minutes(self, minutes: int) -> None:
+        """Stellt die optionale Auto-Aus-Zeit nach 100 % ein (0 = deaktiviert)."""
+        self.auto_off_minutes = max(0, min(180, int(minutes)))
+        if self.auto_off_minutes == 0 and self.auto_off_at_dt is not None:
+            self._cancel_auto_off()
         await self._persist()
         self._on_update()
 
@@ -940,13 +1005,18 @@ class WakeUpLightManager:
                 _LOGGER.warning("Wake-Up Light %s Fehler: %s", eid, err)
 
     async def async_start_now(
-        self, duration_override: int | None = None, is_scheduled: bool = False
+        self,
+        duration_override: int | None = None,
+        auto_off_override: int | None = None,
+        is_scheduled: bool = False,
     ) -> None:
         """Startet den Sonnenaufgang (0 % → 100 %) und pausiert alle betroffenen Automationen."""
         if not self.entities:
             raise HomeAssistantError(
                 "Bitte wähle zuerst unter „Konfiguration öffnen“ mindestens eine Lampe aus."
             )
+
+        self._cancel_auto_off()
 
         if self._dim_task and not self._dim_task.done():
             self._dim_task.cancel()
@@ -959,6 +1029,11 @@ class WakeUpLightManager:
             max(1, min(120, int(duration_override)))
             if duration_override is not None
             else self.duration_minutes
+        )
+        eff_auto_off = (
+            max(0, min(180, int(auto_off_override)))
+            if auto_off_override is not None
+            else self.auto_off_minutes
         )
 
         self.is_running = True
@@ -976,6 +1051,7 @@ class WakeUpLightManager:
             {
                 "entities": list(self.entities),
                 "duration_minutes": dur_min,
+                "auto_off_minutes": eff_auto_off,
                 "paused_automations": list(self.paused_automations),
                 "alarm_entity": self.alarm_entity,
                 "scheduled": is_scheduled,
@@ -983,11 +1059,13 @@ class WakeUpLightManager:
         )
 
         self._dim_task = self.hass.async_create_task(
-            self._async_run_sunrise_loop(dur_min)
+            self._async_run_sunrise_loop(dur_min, eff_auto_off)
         )
         self._on_update()
 
-    async def _async_run_sunrise_loop(self, duration_minutes: int) -> None:
+    async def _async_run_sunrise_loop(
+        self, duration_minutes: int, auto_off_minutes: int = 0
+    ) -> None:
         """Dimmt schrittweise von 1/255 (~0 %) auf 255/255 (100 %) hoch."""
         total_seconds = max(60, duration_minutes * 60)
         step_sec = choose_step_interval_seconds(duration_minutes)
@@ -1032,13 +1110,19 @@ class WakeUpLightManager:
             self.progress_percent = 100
             self.current_brightness_percent = 100
             self.remaining_minutes = 0
-            self.last_run_info = f"Abgeschlossen um {_local_now().strftime('%H:%M')}"
+            if auto_off_minutes > 0:
+                self._schedule_auto_off(auto_off_minutes)
+                off_hhmm = self.auto_off_at_dt.strftime("%H:%M") if self.auto_off_at_dt else ""
+                self.last_run_info = f"100 % erreicht – Auto-Aus um {off_hhmm}"
+            else:
+                self.last_run_info = f"Abgeschlossen um {_local_now().strftime('%H:%M')}"
 
             self.hass.bus.async_fire(
                 EVENT_WAKEUP_COMPLETED,
                 {
                     "entities": list(self.entities),
                     "duration_minutes": duration_minutes,
+                    "auto_off_minutes": auto_off_minutes,
                 },
             )
         except asyncio.CancelledError:
@@ -1063,7 +1147,10 @@ class WakeUpLightManager:
             self._on_update()
 
     async def async_stop(self, cancelled: bool = True) -> None:
-        """Bricht einen laufenden Sonnenaufgang ab und reaktiviert alle pausierten Automationen."""
+        """Bricht einen laufenden Sonnenaufgang oder Auto-Aus-Timer ab und reaktiviert Automationen."""
+        had_auto_off = self.auto_off_at_dt is not None
+        self._cancel_auto_off()
+
         if self._dim_task and not self._dim_task.done():
             self._dim_task.cancel()
             try:
@@ -1074,14 +1161,17 @@ class WakeUpLightManager:
             self.is_running = False
             self.progress_percent = 0
             self.remaining_minutes = 0
+            if had_auto_off and cancelled:
+                self.last_run_info = f"Auto-Aus abgebrochen um {_local_now().strftime('%H:%M')}"
             if self.paused_automations:
                 await self._async_restore_paused_automations()
                 await self._persist()
             self._on_update()
 
     async def async_shutdown(self) -> None:
-        """Beendet Timer, Alarm-Listener & laufenden Task sauber beim Entladen/Neustart."""
+        """Beendet Timer, Auto-Aus, Alarm-Listener & laufenden Task sauber beim Entladen/Neustart."""
         self._cancel_schedule()
+        self._cancel_auto_off()
         if self._unsub_alarm_listener is not None:
             self._unsub_alarm_listener()
             self._unsub_alarm_listener = None
@@ -1143,10 +1233,16 @@ class WakeUpLightManager:
             end_str = p_end.strftime("%H:%M")
             next_start_full = ""
 
+        auto_off_pending = self.auto_off_at_dt is not None
+        auto_off_hhmm = self.auto_off_at_dt.strftime("%H:%M") if self.auto_off_at_dt else ""
+        auto_off_full = self.auto_off_at_dt.strftime("%d.%m. %H:%M") if self.auto_off_at_dt else ""
+
         if not self.entities:
             status_text = "Keine Lampen gewählt"
         elif self.is_running:
             status_text = f"Dimmt · {self.current_brightness_percent} %"
+        elif auto_off_pending:
+            status_text = f"Auto-Aus um {auto_off_hhmm}"
         elif not self.enabled:
             status_text = "Aus"
         elif self.alarm_entity:
@@ -1187,6 +1283,10 @@ class WakeUpLightManager:
             "mode": self.mode,
             "wakeup_time": self.wakeup_time,
             "duration_minutes": self.duration_minutes,
+            "auto_off_minutes": self.auto_off_minutes,
+            "auto_off_pending": auto_off_pending,
+            "auto_off_hhmm": auto_off_hhmm,
+            "auto_off_full": auto_off_full,
             "weekdays": self.weekdays,
             "auto_pause": self.auto_pause,
             "sunrise_color": self.sunrise_color,

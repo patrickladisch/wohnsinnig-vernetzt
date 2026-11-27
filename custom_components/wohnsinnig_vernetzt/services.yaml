@@ -101,6 +101,15 @@ start_wakeup_light:
           min: 1
           max: 120
           unit_of_measurement: min
+    auto_off_minutes:
+      name: Auto-Aus nach 100 % in Minuten (optional)
+      description: Schaltet die Lampen nach dem Erreichen von 100 % nach dieser Zeit automatisch aus (0 = deaktiviert).
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 180
+          unit_of_measurement: min
 
 stop_wakeup_light:
   name: Wake-Up Light abbrechen

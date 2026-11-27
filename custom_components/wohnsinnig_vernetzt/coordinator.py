@@ -52,6 +52,7 @@ from .const import (
     DEFAULT_WAKEUP_ALARM_ENTITY,
     DEFAULT_WAKEUP_AUTO_PAUSE,
     DEFAULT_WAKEUP_DAYS,
+    DEFAULT_WAKEUP_AUTO_OFF_MINUTES,
     DEFAULT_WAKEUP_DURATION,
     DEFAULT_WAKEUP_MODE,
     DEFAULT_WAKEUP_SUNRISE_COLOR,
@@ -296,6 +297,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         wakeup_mode: str = DEFAULT_WAKEUP_MODE,
         wakeup_time: str = DEFAULT_WAKEUP_TIME,
         wakeup_duration: int = DEFAULT_WAKEUP_DURATION,
+        wakeup_auto_off_minutes: int = DEFAULT_WAKEUP_AUTO_OFF_MINUTES,
         wakeup_days: str = DEFAULT_WAKEUP_DAYS,
         wakeup_auto_pause: bool = DEFAULT_WAKEUP_AUTO_PAUSE,
         wakeup_pause_automations: list[str] | None = None,
@@ -404,6 +406,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self._config_wakeup_mode = str(wakeup_mode or DEFAULT_WAKEUP_MODE)
         self._config_wakeup_time = parse_wakeup_time(wakeup_time).strftime("%H:%M")
         self._config_wakeup_duration = max(1, min(120, int(wakeup_duration or DEFAULT_WAKEUP_DURATION)))
+        self._config_wakeup_auto_off_minutes = max(0, min(180, int(wakeup_auto_off_minutes or 0)))
         self._config_wakeup_days = str(wakeup_days or DEFAULT_WAKEUP_DAYS)
         self._config_wakeup_auto_pause = bool(wakeup_auto_pause)
         self._config_wakeup_sunrise_color = bool(wakeup_sunrise_color)
@@ -419,6 +422,7 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             mode=self._config_wakeup_mode,
             wakeup_time=self._config_wakeup_time,
             duration_minutes=self._config_wakeup_duration,
+            auto_off_minutes=self._config_wakeup_auto_off_minutes,
             weekdays=self._config_wakeup_days,
             auto_pause=self._config_wakeup_auto_pause,
             manual_pause_automations=normalize_wakeup_automations(
@@ -536,6 +540,11 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
             ):
                 self.wakeup_manager.duration_minutes = max(1, min(120, stored["wakeup_duration"]))
             if (
+                isinstance(stored.get("wakeup_auto_off_minutes"), int)
+                and stored.get("last_config_wakeup_auto_off_minutes") == self._config_wakeup_auto_off_minutes
+            ):
+                self.wakeup_manager.auto_off_minutes = max(0, min(180, stored["wakeup_auto_off_minutes"]))
+            if (
                 isinstance(stored.get("wakeup_days"), str)
                 and stored.get("last_config_wakeup_days") == self._config_wakeup_days
             ):
@@ -597,6 +606,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "last_config_wakeup_time": self._config_wakeup_time,
                 "wakeup_duration": self.wakeup_manager.duration_minutes,
                 "last_config_wakeup_duration": self._config_wakeup_duration,
+                "wakeup_auto_off_minutes": self.wakeup_manager.auto_off_minutes,
+                "last_config_wakeup_auto_off_minutes": self._config_wakeup_auto_off_minutes,
                 "wakeup_days": self.wakeup_manager.weekdays,
                 "last_config_wakeup_days": self._config_wakeup_days,
                 "wakeup_auto_pause": self.wakeup_manager.auto_pause,

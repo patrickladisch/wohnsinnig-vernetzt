@@ -210,6 +210,8 @@ class WohnsinnigVernetztWakeUpLightSwitch(WohnsinnigVernetztEntity, SwitchEntity
             "startzeit": snap["start_hhmm"],
             "zielzeit": snap["end_hhmm"],
             "dauer_minuten": snap["duration_minutes"],
+            "auto_aus_minuten": snap["auto_off_minutes"],
+            "auto_aus_um": snap["auto_off_hhmm"],
             "pausierte_automationen": snap["paused_automation_names"],
         }
 

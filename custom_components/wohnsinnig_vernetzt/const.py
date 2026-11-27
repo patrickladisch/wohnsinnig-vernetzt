@@ -1,7 +1,7 @@
 """Konstanten für Wohnsinnig vernetzt."""
 
 DOMAIN = "wohnsinnig_vernetzt"
-VERSION = "2.7.0"
+VERSION = "2.8.0"
 
 DEFAULT_RSS_URL = "https://anchor.fm/s/111a8abd0/podcast/rss"
 DEFAULT_BLUEPRINTS_URL = "https://www.wohnsinnigvernetzt.de/"
@@ -126,6 +126,7 @@ WAKEUP_DAYS_LABELS = {
 DEFAULT_WAKEUP_MODE = WAKEUP_MODE_REACH_100
 DEFAULT_WAKEUP_TIME = "07:00"
 DEFAULT_WAKEUP_DURATION = 30
+DEFAULT_WAKEUP_AUTO_OFF_MINUTES = 0
 DEFAULT_WAKEUP_DAYS = WAKEUP_DAYS_DAILY
 DEFAULT_WAKEUP_AUTO_PAUSE = True
 DEFAULT_WAKEUP_SUNRISE_COLOR = True
@@ -136,6 +137,7 @@ CONF_WAKEUP_ENTITIES = "wakeup_entities"
 CONF_WAKEUP_MODE = "wakeup_mode"
 CONF_WAKEUP_TIME = "wakeup_time"
 CONF_WAKEUP_DURATION = "wakeup_duration"
+CONF_WAKEUP_AUTO_OFF_MINUTES = "wakeup_auto_off_minutes"
 CONF_WAKEUP_DAYS = "wakeup_days"
 CONF_WAKEUP_AUTO_PAUSE = "wakeup_auto_pause"
 CONF_WAKEUP_PAUSE_AUTOMATIONS = "wakeup_pause_automations"
@@ -145,6 +147,7 @@ CONF_WAKEUP_ALARM_ENTITY = "wakeup_alarm_entity"
 EVENT_WAKEUP_STARTED = f"{DOMAIN}_wakeup_started"
 EVENT_WAKEUP_COMPLETED = f"{DOMAIN}_wakeup_completed"
 EVENT_WAKEUP_CANCELLED = f"{DOMAIN}_wakeup_cancelled"
+EVENT_WAKEUP_AUTO_OFF = f"{DOMAIN}_wakeup_auto_off"
 
 SERVICE_START_WAKEUP = "start_wakeup_light"
 SERVICE_STOP_WAKEUP = "stop_wakeup_light"

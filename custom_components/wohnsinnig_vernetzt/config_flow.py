@@ -37,6 +37,7 @@ from .const import (
     CONF_WAKEUP_ALARM_ENTITY,
     CONF_WAKEUP_AUTO_PAUSE,
     CONF_WAKEUP_DAYS,
+    CONF_WAKEUP_AUTO_OFF_MINUTES,
     CONF_WAKEUP_DURATION,
     CONF_WAKEUP_ENTITIES,
     CONF_WAKEUP_MODE,
@@ -60,6 +61,7 @@ from .const import (
     DEFAULT_WAKEUP_ALARM_ENTITY,
     DEFAULT_WAKEUP_AUTO_PAUSE,
     DEFAULT_WAKEUP_DAYS,
+    DEFAULT_WAKEUP_AUTO_OFF_MINUTES,
     DEFAULT_WAKEUP_DURATION,
     DEFAULT_WAKEUP_MODE,
     DEFAULT_WAKEUP_SUNRISE_COLOR,
@@ -355,6 +357,15 @@ def _build_wakeup_schema(hass: HomeAssistant, defaults: dict) -> vol.Schema:
                 ),
             ): vol.All(vol.Coerce(int), vol.Range(min=1, max=120)),
             vol.Required(
+                CONF_WAKEUP_AUTO_OFF_MINUTES,
+                default=int(
+                    defaults.get(
+                        CONF_WAKEUP_AUTO_OFF_MINUTES,
+                        DEFAULT_WAKEUP_AUTO_OFF_MINUTES,
+                    )
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=180)),
+            vol.Required(
                 CONF_WAKEUP_DAYS,
                 default=str(defaults.get(CONF_WAKEUP_DAYS, DEFAULT_WAKEUP_DAYS)),
             ): selector.SelectSelector(
@@ -450,6 +461,7 @@ class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
             current[CONF_WAKEUP_MODE] = wm.mode
             current[CONF_WAKEUP_TIME] = wm.wakeup_time
             current[CONF_WAKEUP_DURATION] = wm.duration_minutes
+            current[CONF_WAKEUP_AUTO_OFF_MINUTES] = wm.auto_off_minutes
             current[CONF_WAKEUP_DAYS] = wm.weekdays
             current[CONF_WAKEUP_AUTO_PAUSE] = wm.auto_pause
             current[CONF_WAKEUP_PAUSE_AUTOMATIONS] = list(wm.manual_pause_automations)

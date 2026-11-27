@@ -43,6 +43,7 @@ from .const import (
     CONF_WAKEUP_ALARM_ENTITY,
     CONF_WAKEUP_AUTO_PAUSE,
     CONF_WAKEUP_DAYS,
+    CONF_WAKEUP_AUTO_OFF_MINUTES,
     CONF_WAKEUP_DURATION,
     CONF_WAKEUP_ENTITIES,
     CONF_WAKEUP_MODE,
@@ -66,6 +67,7 @@ from .const import (
     DEFAULT_WAKEUP_ALARM_ENTITY,
     DEFAULT_WAKEUP_AUTO_PAUSE,
     DEFAULT_WAKEUP_DAYS,
+    DEFAULT_WAKEUP_AUTO_OFF_MINUTES,
     DEFAULT_WAKEUP_DURATION,
     DEFAULT_WAKEUP_MODE,
     DEFAULT_WAKEUP_SUNRISE_COLOR,
@@ -147,6 +149,7 @@ BATTERY_EXCLUSION_SCHEMA = vol.Schema(
 START_WAKEUP_SCHEMA = vol.Schema(
     {
         vol.Optional("duration_minutes"): vol.All(vol.Coerce(int), vol.Range(min=1, max=120)),
+        vol.Optional("auto_off_minutes"): vol.All(vol.Coerce(int), vol.Range(min=0, max=180)),
     }
 )
 
@@ -520,6 +523,7 @@ class WohnsinnigVernetztWakeUpConfigView(HomeAssistantView):
                 "wakeup_mode": wm.mode,
                 "wakeup_time": wm.wakeup_time,
                 "wakeup_duration": wm.duration_minutes,
+                "wakeup_auto_off_minutes": wm.auto_off_minutes,
                 "wakeup_days": wm.weekdays,
                 "wakeup_auto_pause": wm.auto_pause,
                 "wakeup_pause_automations": list(wm.manual_pause_automations),
@@ -556,6 +560,10 @@ class WohnsinnigVernetztWakeUpConfigView(HomeAssistantView):
             duration = max(1, min(120, int(payload.get("wakeup_duration", DEFAULT_WAKEUP_DURATION))))
         except (TypeError, ValueError):
             duration = DEFAULT_WAKEUP_DURATION
+        try:
+            auto_off = max(0, min(180, int(payload.get("wakeup_auto_off_minutes", DEFAULT_WAKEUP_AUTO_OFF_MINUTES))))
+        except (TypeError, ValueError):
+            auto_off = DEFAULT_WAKEUP_AUTO_OFF_MINUTES
         days = str(payload.get("wakeup_days") or DEFAULT_WAKEUP_DAYS)
         if days not in ("daily", "workdays", "weekend"):
             days = DEFAULT_WAKEUP_DAYS
@@ -568,6 +576,7 @@ class WohnsinnigVernetztWakeUpConfigView(HomeAssistantView):
         merged[CONF_WAKEUP_MODE] = mode
         merged[CONF_WAKEUP_TIME] = w_time
         merged[CONF_WAKEUP_DURATION] = duration
+        merged[CONF_WAKEUP_AUTO_OFF_MINUTES] = auto_off
         merged[CONF_WAKEUP_DAYS] = days
         merged[CONF_WAKEUP_AUTO_PAUSE] = auto_pause
         merged[CONF_WAKEUP_PAUSE_AUTOMATIONS] = automations
@@ -692,6 +701,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         wakeup_time=str(config.get(CONF_WAKEUP_TIME, DEFAULT_WAKEUP_TIME)),
         wakeup_duration=int(
             config.get(CONF_WAKEUP_DURATION, DEFAULT_WAKEUP_DURATION)
+        ),
+        wakeup_auto_off_minutes=int(
+            config.get(CONF_WAKEUP_AUTO_OFF_MINUTES, DEFAULT_WAKEUP_AUTO_OFF_MINUTES)
         ),
         wakeup_days=str(config.get(CONF_WAKEUP_DAYS, DEFAULT_WAKEUP_DAYS)),
         wakeup_auto_pause=bool(
@@ -882,6 +894,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
             await coord.wakeup_manager.async_start_now(
                 duration_override=call.data.get("duration_minutes"),
+                auto_off_override=call.data.get("auto_off_minutes"),
                 is_scheduled=False,
             )
 
