@@ -10,7 +10,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DEVICE_SECTION_CHECKS, DOMAIN
 from .coordinator import WohnsinnigVernetztCoordinator
 from .entity import WohnsinnigVernetztEntity
 
@@ -30,6 +30,7 @@ async def async_setup_entry(
 class WohnsinnigVernetztBatteryPushTimeEntity(WohnsinnigVernetztEntity, TimeEntity):
     """Legt die feste Tageszeit für gebündelte Batterie-Push-Meldungen fest."""
 
+    _device_section = DEVICE_SECTION_CHECKS
     _attr_name = "Batterie-Push Uhrzeit"
     _attr_icon = "mdi:clock-outline"
     _attr_entity_category = EntityCategory.CONFIG

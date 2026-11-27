@@ -1,7 +1,7 @@
 """Konstanten für Wohnsinnig vernetzt."""
 
 DOMAIN = "wohnsinnig_vernetzt"
-VERSION = "2.4.1"
+VERSION = "2.5.0"
 
 DEFAULT_RSS_URL = "https://anchor.fm/s/111a8abd0/podcast/rss"
 DEFAULT_BLUEPRINTS_URL = "https://www.wohnsinnigvernetzt.de/"
@@ -71,6 +71,7 @@ EVENT_BATTERY_CHECK_COMPLETED = f"{DOMAIN}_battery_check_completed"
 EVENT_BATTERY_PUSH_SENT = f"{DOMAIN}_battery_push_sent"
 EVENT_SILENT_SENSORS_COMPLETED = f"{DOMAIN}_silent_sensors_completed"
 EVENT_PRESENCE_INTERFERENCE_BLOCKED = f"{DOMAIN}_presence_interference_blocked"
+EVENT_OPEN_CONFIG = f"{DOMAIN}_open_config"
 SIGNAL_NEW_EPISODE = f"{DOMAIN}_signal_new_episode"
 
 # Interaktive Companion-App-Push-Aktionen
@@ -88,10 +89,18 @@ SERVICE_INCLUDE_BATTERY_DEVICE = "include_battery_device"
 BLUEPRINT_SUBDIR = "wohnsinnig_vernetzt"
 ALLOWED_BLUEPRINT_DOMAINS = ("automation", "script")
 
-DEVICE_NAME = "Wohnsinnig vernetzt"
+DEVICE_SECTION_AUDIO = "audio"
+DEVICE_SECTION_PRESENCE = "presence"
+DEVICE_SECTION_BLUEPRINTS = "blueprints"
+DEVICE_SECTION_CHECKS = "checks"
+
+DEVICE_NAME = "Wohnsinnig vernetzt – Audio & Podcast"
 DEVICE_MODEL = "Podcast: Wohnsinnig vernetzt"
 DEVICE_MANUFACTURER = "Niels und Patrick – www.wohnsinnigvernetzt.de"
 DEVICE_CONFIG_URL = "https://www.wohnsinnigvernetzt.de"
+DEVICE_INTEGRATION_CONFIG_URL = (
+    f"homeassistant://config/integrations/integration/{DOMAIN}"
+)
 
 CARD_URL_BASE = f"/{DOMAIN}"
 CARD_FILENAME = "wohnsinnig-vernetzt-card.js"

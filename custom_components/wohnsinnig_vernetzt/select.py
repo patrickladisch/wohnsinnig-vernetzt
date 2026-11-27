@@ -15,6 +15,8 @@ from .const import (
     BATTERY_PUSH_MODE_SCHEDULED,
     BROWSER_TARGET,
     BROWSER_TARGET_LABEL,
+    DEVICE_SECTION_BLUEPRINTS,
+    DEVICE_SECTION_CHECKS,
     DOMAIN,
     NOTIFY_NONE,
 )
@@ -87,7 +89,7 @@ async def async_setup_entry(
 class WohnsinnigVernetztEpisodeSelect(WohnsinnigVernetztEntity, SelectEntity):
     """Dropdown mit allen Folgen – kompakt gekürzt, startet direkt den Media Player."""
 
-    _attr_name = "Podcast: Folge wählen"
+    _attr_name = "Folge wählen"
     _attr_icon = "mdi:play-box-multiple"
 
     def __init__(
@@ -240,7 +242,8 @@ class WohnsinnigVernetztNotifyDeviceSelect(WohnsinnigVernetztEntity, SelectEntit
 class WohnsinnigVernetztBlueprintSelect(WohnsinnigVernetztEntity, SelectEntity):
     """Dropdown mit allen Blueprints von wohnsinnigvernetzt.de (kompakt formatiert)."""
 
-    _attr_name = "Blueprint: Auswählen"
+    _device_section = DEVICE_SECTION_BLUEPRINTS
+    _attr_name = "Blueprint auswählen"
     _attr_icon = "mdi:file-download-outline"
 
     def __init__(
@@ -297,7 +300,8 @@ class WohnsinnigVernetztBlueprintSelect(WohnsinnigVernetztEntity, SelectEntity):
 class WohnsinnigVernetztBatteryListSelect(WohnsinnigVernetztEntity, SelectEntity):
     """1-Klick-Dropdown direkt auf der Geräteseite mit allen Batterien unter 15 %."""
 
-    _attr_name = "Batterie: Schwache Geräte"
+    _device_section = DEVICE_SECTION_CHECKS
+    _attr_name = "Schwache Batterien"
 
     def __init__(
         self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
@@ -371,7 +375,8 @@ class WohnsinnigVernetztBatteryListSelect(WohnsinnigVernetztEntity, SelectEntity
 class WohnsinnigVernetztSilentSensorsSelect(WohnsinnigVernetztEntity, SelectEntity):
     """1-Klick-Dropdown direkt auf der Geräteseite mit allen stillen Sensoren."""
 
-    _attr_name = "Stille Sensoren: Übersicht"
+    _device_section = DEVICE_SECTION_CHECKS
+    _attr_name = "Stille Sensoren"
 
     def __init__(
         self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
@@ -438,6 +443,7 @@ class WohnsinnigVernetztSilentSensorsSelect(WohnsinnigVernetztEntity, SelectEnti
 class WohnsinnigVernetztBatteryPushModeSelect(WohnsinnigVernetztEntity, SelectEntity):
     """Wählt zwischen gebündeltem Tages-Push und sofortigem Push bei schwacher Batterie."""
 
+    _device_section = DEVICE_SECTION_CHECKS
     _attr_name = "Batterie-Push Modus"
     _attr_icon = "mdi:bell-cog-outline"
     _attr_entity_category = EntityCategory.CONFIG
@@ -468,6 +474,7 @@ class WohnsinnigVernetztBatteryPushModeSelect(WohnsinnigVernetztEntity, SelectEn
 class WohnsinnigVernetztBatteryExcludeSelect(WohnsinnigVernetztEntity, SelectEntity):
     """1-Klick-Dropdown unter Konfiguration zum Ausschließen eines Batterie-Geräts."""
 
+    _device_section = DEVICE_SECTION_CHECKS
     _attr_name = "Batterie: Gerät ausschließen"
     _attr_icon = "mdi:battery-off-outline"
     _attr_entity_category = EntityCategory.CONFIG
@@ -535,6 +542,7 @@ class WohnsinnigVernetztBatteryExcludeSelect(WohnsinnigVernetztEntity, SelectEnt
 class WohnsinnigVernetztBatteryExcludedListSelect(WohnsinnigVernetztEntity, SelectEntity):
     """1-Klick-Dropdown unter Konfiguration: zeigt ausgeschlossene Geräte & nimmt sie wieder auf."""
 
+    _device_section = DEVICE_SECTION_CHECKS
     _attr_name = "Batterie: Ausgeschlossen"
     _attr_entity_category = EntityCategory.CONFIG
 

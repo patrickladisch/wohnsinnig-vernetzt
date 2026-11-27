@@ -8,7 +8,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DEVICE_SECTION_CHECKS, DEVICE_SECTION_PRESENCE, DOMAIN
 from .coordinator import WohnsinnigVernetztCoordinator
 from .entity import WohnsinnigVernetztEntity
 
@@ -85,6 +85,7 @@ class WohnsinnigVernetztAlertsSwitch(WohnsinnigVernetztEntity, SwitchEntity):
 class WohnsinnigVernetztBatteryPushSwitch(WohnsinnigVernetztEntity, SwitchEntity):
     """Schaltet proaktive Batterie-Push-Meldungen (ohne Spam) ein oder aus."""
 
+    _device_section = DEVICE_SECTION_CHECKS
     _attr_name = "Batterie-Push aktiv"
     _attr_icon = "mdi:battery-alert"
     _attr_entity_category = EntityCategory.CONFIG
@@ -122,6 +123,7 @@ class WohnsinnigVernetztBatteryPushSwitch(WohnsinnigVernetztEntity, SwitchEntity
 class WohnsinnigVernetztPresenceSimulationSwitch(WohnsinnigVernetztEntity, SwitchEntity):
     """HAUPTSCHALTER für die Anwesenheitssimulation (1:1 Verlauf vor 2 Wochen ± 7 Min)."""
 
+    _device_section = DEVICE_SECTION_PRESENCE
     _attr_name = "Anwesenheitssimulation"
 
     def __init__(

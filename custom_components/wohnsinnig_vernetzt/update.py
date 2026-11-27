@@ -9,7 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DEVICE_SECTION_BLUEPRINTS, DOMAIN
 from .coordinator import WohnsinnigVernetztCoordinator
 from .entity import WohnsinnigVernetztEntity
 
@@ -31,7 +31,8 @@ class WohnsinnigVernetztBlueprintsUpdateEntity(
 ):
     """Prüft installierte Blueprints gegen wohnsinnigvernetzt.de und installiert Updates per Klick."""
 
-    _attr_name = "Blueprints: Updates"
+    _device_section = DEVICE_SECTION_BLUEPRINTS
+    _attr_name = "Blueprint-Updates"
     _attr_title = "Wohnsinnig vernetzt Blueprints"
     _attr_icon = "mdi:file-refresh-outline"
     _attr_release_url = "https://www.wohnsinnigvernetzt.de/"

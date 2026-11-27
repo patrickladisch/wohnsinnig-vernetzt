@@ -69,6 +69,14 @@ from .const import (
     VERSION,
 )
 from .coordinator import WohnsinnigVernetztCoordinator, normalize_notify_services
+from .entity import (
+    SECTION_DEVICE_SPECS,
+    get_section_device_identifier,
+)
+from .presence_simulation import (
+    normalize_automation_entities,
+    normalize_presence_entities,
+)
 
 PLATFORMS: list[Platform] = [
     Platform.MEDIA_PLAYER,
@@ -327,6 +335,104 @@ class WohnsinnigVernetztBatteryExclusionsView(HomeAssistantView):
         )
 
 
+class WohnsinnigVernetztPresenceConfigView(HomeAssistantView):
+    """Liefert und speichert die Anwesenheitssimulation-Konfiguration direkt aus dem Dialog."""
+
+    url = f"/api/{DOMAIN}/presence_config"
+    name = f"api:{DOMAIN}:presence_config"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        domain_data = hass.data.get(DOMAIN, {})
+        coordinator: WohnsinnigVernetztCoordinator | None = domain_data.get(
+            "coordinator"
+        )
+        if coordinator is None:
+            return self.json({"error": "Integration nicht geladen."}, status_code=503)
+
+        pm = coordinator.presence_manager
+        lights_switches: list[dict] = []
+        for st in hass.states.async_all(["light", "switch"]):
+            if f".{DOMAIN}" in st.entity_id:
+                continue
+            attrs = st.attributes or {}
+            if attrs.get("restored") is True:
+                continue
+            lights_switches.append(
+                {
+                    "entity_id": st.entity_id,
+                    "domain": st.entity_id.split(".", 1)[0],
+                    "name": str(attrs.get("friendly_name") or st.entity_id).strip(),
+                    "state": st.state,
+                }
+            )
+        lights_switches.sort(key=lambda item: (item["name"].lower(), item["entity_id"]))
+
+        automations: list[dict] = []
+        for st in hass.states.async_all("automation"):
+            attrs = st.attributes or {}
+            automations.append(
+                {
+                    "entity_id": st.entity_id,
+                    "name": str(attrs.get("friendly_name") or st.entity_id).strip(),
+                    "state": st.state,
+                }
+            )
+        automations.sort(key=lambda item: (item["name"].lower(), item["entity_id"]))
+
+        return self.json(
+            {
+                "enabled": pm.enabled,
+                "presence_entities": list(pm.entities),
+                "presence_jitter_minutes": pm.jitter_minutes,
+                "presence_auto_pause_motion": pm.auto_pause_motion,
+                "presence_pause_automations": list(pm.manual_pause_automations),
+                "available_entities": lights_switches,
+                "available_automations": automations,
+            }
+        )
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if not entries:
+            return self.json({"error": "Kein Config Entry gefunden."}, status_code=404)
+        entry = entries[0]
+
+        try:
+            payload = await request.json()
+        except ValueError:
+            return self.json({"error": "Ungültiges JSON."}, status_code=400)
+
+        entities = normalize_presence_entities(payload.get("presence_entities"))
+        automations = normalize_automation_entities(
+            payload.get("presence_pause_automations")
+        )
+        try:
+            jitter = max(0, min(30, int(payload.get("presence_jitter_minutes", 7))))
+        except (TypeError, ValueError):
+            jitter = 7
+        auto_pause = bool(payload.get("presence_auto_pause_motion", True))
+
+        merged = {**entry.data, **entry.options}
+        merged[CONF_PRESENCE_ENTITIES] = entities
+        merged[CONF_PRESENCE_PAUSE_AUTOMATIONS] = automations
+        merged[CONF_PRESENCE_JITTER_MINUTES] = jitter
+        merged[CONF_PRESENCE_AUTO_PAUSE_MOTION] = auto_pause
+
+        hass.config_entries.async_update_entry(entry, options=merged)
+        return self.json(
+            {
+                "status": "ok",
+                "presence_entities": entities,
+                "presence_jitter_minutes": jitter,
+                "presence_auto_pause_motion": auto_pause,
+                "presence_pause_automations": automations,
+            }
+        )
+
+
 LEGACY_ENTITY_UNIQUE_ID_SUFFIXES = (
     "_send_feedback",
     "_feedback_message",
@@ -349,20 +455,22 @@ def _cleanup_legacy_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 def _sync_device_info(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Aktualisiert bestehende Geräte-Informationen direkt in der Device-Registry."""
+    """Aktualisiert bestehende Geräte-Informationen für alle 4 Bereiche in der Device-Registry."""
     dev_reg = dr.async_get(hass)
-    device = dev_reg.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
-    if device is not None:
-        try:
-            dev_reg.async_update_device(
-                device.id,
-                name=DEVICE_NAME,
-                model=DEVICE_MODEL,
-                manufacturer=DEVICE_MANUFACTURER,
-                configuration_url=DEVICE_CONFIG_URL,
-            )
-        except TypeError:
-            pass
+    for section, spec in SECTION_DEVICE_SPECS.items():
+        ident = get_section_device_identifier(entry.entry_id, section)
+        device = dev_reg.async_get_device(identifiers={ident})
+        if device is not None:
+            try:
+                dev_reg.async_update_device(
+                    device.id,
+                    name=spec["name"],
+                    model=spec["model"],
+                    manufacturer=DEVICE_MANUFACTURER,
+                    configuration_url=spec["config_url"],
+                )
+            except TypeError:
+                pass
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -383,6 +491,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(WohnsinnigVernetztBatteryCheckView())
         hass.http.register_view(WohnsinnigVernetztSilentSensorsView())
         hass.http.register_view(WohnsinnigVernetztBatteryExclusionsView())
+        hass.http.register_view(WohnsinnigVernetztPresenceConfigView())
         domain_data["frontend_registered"] = True
 
     config = {**entry.data, **entry.options}

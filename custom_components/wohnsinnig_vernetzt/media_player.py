@@ -53,7 +53,7 @@ async def async_setup_entry(
 class WohnsinnigVernetztMediaPlayer(WohnsinnigVernetztEntity, MediaPlayerEntity):
     """Spielt Podcast-Folgen über den Browser oder einen HA-Lautsprecher ab."""
 
-    _attr_name = "Podcast: Player"
+    _attr_name = "Player"
     _attr_icon = "mdi:podcast"
     _attr_supported_features = (
         MediaPlayerEntityFeature.PLAY

@@ -8,7 +8,7 @@ from homeassistant.const import EntityCategory, PERCENTAGE, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DEVICE_SECTION_CHECKS, DOMAIN
 from .coordinator import WohnsinnigVernetztCoordinator
 from .entity import WohnsinnigVernetztEntity
 
@@ -31,6 +31,7 @@ async def async_setup_entry(
 class WohnsinnigVernetztBatteryThresholdNumber(WohnsinnigVernetztEntity, NumberEntity):
     """Stellt die Batterie-Warngrenze (Standard: 15 %) direkt ein."""
 
+    _device_section = DEVICE_SECTION_CHECKS
     _attr_name = "Batterie-Grenze"
     _attr_icon = "mdi:battery-alert-variant-outline"
     _attr_entity_category = EntityCategory.CONFIG
@@ -56,6 +57,7 @@ class WohnsinnigVernetztBatteryThresholdNumber(WohnsinnigVernetztEntity, NumberE
 class WohnsinnigVernetztSilentHoursNumber(WohnsinnigVernetztEntity, NumberEntity):
     """Stellt ein, ab wie vielen Stunden ohne Update ein Sensor als still gilt."""
 
+    _device_section = DEVICE_SECTION_CHECKS
     _attr_name = "Stille-Sensoren-Grenze"
     _attr_icon = "mdi:timer-sand"
     _attr_entity_category = EntityCategory.CONFIG

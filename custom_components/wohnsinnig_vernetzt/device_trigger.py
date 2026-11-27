@@ -8,6 +8,7 @@ from homeassistant.components.device_automation import DEVICE_TRIGGER_BASE_SCHEM
 from homeassistant.components.homeassistant.triggers import event as event_trigger
 from homeassistant.const import CONF_DEVICE_ID, CONF_DOMAIN, CONF_PLATFORM, CONF_TYPE
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.trigger import TriggerActionType, TriggerInfo
 from homeassistant.helpers.typing import ConfigType
 
@@ -25,7 +26,18 @@ TRIGGER_SCHEMA = DEVICE_TRIGGER_BASE_SCHEMA.extend(
 async def async_get_triggers(
     hass: HomeAssistant, device_id: str
 ) -> list[dict[str, str]]:
-    """Gibt verfügbare Geräte-Auslöser zurück."""
+    """Gibt verfügbare Geräte-Auslöser nur für das Audio-&-Podcast-Gerät zurück."""
+    dev_reg = dr.async_get(hass)
+    device = dev_reg.async_get(device_id)
+    if device is not None:
+        is_sub_device = any(
+            domain == DOMAIN
+            and ident.endswith(("_presence", "_blueprints", "_checks"))
+            for domain, ident in device.identifiers
+        )
+        if is_sub_device:
+            return []
+
     return [
         {
             CONF_PLATFORM: "device",

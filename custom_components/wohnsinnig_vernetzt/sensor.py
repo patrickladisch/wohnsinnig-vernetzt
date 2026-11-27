@@ -7,7 +7,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import (
+    DEVICE_SECTION_BLUEPRINTS,
+    DEVICE_SECTION_CHECKS,
+    DEVICE_SECTION_PRESENCE,
+    DOMAIN,
+)
 from .coordinator import WohnsinnigVernetztCoordinator
 from .entity import WohnsinnigVernetztEntity
 
@@ -149,7 +154,8 @@ class WohnsinnigVernetztEpisodesSensor(WohnsinnigVernetztEntity, SensorEntity):
 class WohnsinnigVernetztBlueprintsSensor(WohnsinnigVernetztEntity, SensorEntity):
     """Zeigt alle verfügbaren Blueprints inkl. Import- und Update-Status."""
 
-    _attr_name = "Blueprints"
+    _device_section = DEVICE_SECTION_BLUEPRINTS
+    _attr_name = "Verfügbare Blueprints"
     _attr_icon = "mdi:file-code-outline"
     _attr_native_unit_of_measurement = "Blueprints"
     _unrecorded_attributes = frozenset({"blueprints"})
@@ -240,6 +246,7 @@ class WohnsinnigVernetztAlertSensor(WohnsinnigVernetztEntity, SensorEntity):
 class WohnsinnigVernetztBatteryCheckSensor(WohnsinnigVernetztEntity, SensorEntity):
     """Zeigt alle Geräte mit weniger als 15 % Batteriestand an."""
 
+    _device_section = DEVICE_SECTION_CHECKS
     _attr_name = "Batterie-Check"
     _unrecorded_attributes = frozenset({"geraete", "devices", "ausgeschlossene_geraete", "excluded_devices"})
 
@@ -285,6 +292,7 @@ class WohnsinnigVernetztBatteryCheckSensor(WohnsinnigVernetztEntity, SensorEntit
 class WohnsinnigVernetztSilentSensorsSensor(WohnsinnigVernetztEntity, SensorEntity):
     """Zeigt alle physischen Sensoren an, die stumm eingefroren sind (> X Stunden ohne Update)."""
 
+    _device_section = DEVICE_SECTION_CHECKS
     _attr_name = "Stille Sensoren"
     _unrecorded_attributes = frozenset({"geraete", "devices"})
 
@@ -321,7 +329,8 @@ class WohnsinnigVernetztSilentSensorsSensor(WohnsinnigVernetztEntity, SensorEnti
 class WohnsinnigVernetztPresenceStatusSensor(WohnsinnigVernetztEntity, SensorEntity):
     """Zeigt Status, Datenquelle, geplante Schaltungen und abgewehrte Bewegungsmelder-Eingriffe."""
 
-    _attr_name = "Anwesenheitssimulation Status"
+    _device_section = DEVICE_SECTION_PRESENCE
+    _attr_name = "Status"
     _unrecorded_attributes = frozenset(
         {"geplante_schaltungen", "upcoming", "ausgewaehlte_geraete", "pausierte_automationen"}
     )

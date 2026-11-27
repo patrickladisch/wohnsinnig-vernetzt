@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.4.1
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.5.0
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -2282,6 +2282,28 @@ class WohnsinnigVernetztPresenceCard extends HTMLElement {
           color: var(--secondary-text-color);
           margin-top: 2px;
         }
+        .ps-right-actions {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-shrink: 0;
+        }
+        .ps-cfg-btn {
+          background: var(--secondary-background-color);
+          border: 1px solid var(--divider-color);
+          color: var(--primary-text-color);
+          cursor: pointer;
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 14px;
+        }
+        .ps-cfg-btn:hover {
+          border-color: var(--primary-color);
+        }
         .ps-master {
           border: none;
           cursor: pointer;
@@ -2411,7 +2433,10 @@ class WohnsinnigVernetztPresenceCard extends HTMLElement {
               <div id="ps-sub" class="ps-sub"></div>
             </div>
           </div>
-          <button id="ps-toggle" class="ps-master off" type="button">AUS</button>
+          <div class="ps-right-actions">
+            <button id="ps-config" class="ps-cfg-btn" type="button" title="Anwesenheitssimulation konfigurieren">⚙️</button>
+            <button id="ps-toggle" class="ps-master off" type="button">AUS</button>
+          </div>
         </div>
         <div id="ps-error" class="ps-error"></div>
         <div id="ps-stats" class="ps-stats"></div>
@@ -2424,6 +2449,12 @@ class WohnsinnigVernetztPresenceCard extends HTMLElement {
 
     this.shadowRoot.getElementById("ps-toggle").addEventListener("click", (ev) => {
       this._toggleMaster(ev);
+    });
+    this.shadowRoot.getElementById("ps-config").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      if (window.__wvOpenPresenceConfigDialog) {
+        window.__wvOpenPresenceConfigDialog(this._hass);
+      }
     });
     this.shadowRoot.getElementById("ps-list-toggle").addEventListener("click", () => {
       this._open = !this._open;
@@ -2441,4 +2472,638 @@ if (!window.customCards.some((c) => c.type === "wohnsinnig-vernetzt-presence-car
     name: "Wohnsinnig vernetzt Anwesenheitssimulation",
     description: "Hauptschalter, Schutz-Status & geplante Schaltungen (14-Tage-Verlauf ± 7 Min).",
   });
+}
+class WohnsinnigVernetztPresenceConfigDialog extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._hass = null;
+    this._loading = true;
+    this._saving = false;
+    this._error = "";
+    this._savedMsg = "";
+    this._entitySearch = "";
+    this._autoSearch = "";
+    this._selectedEntities = new Set();
+    this._selectedAutomations = new Set();
+    this._availableEntities = [];
+    this._availableAutomations = [];
+    this._jitterMinutes = 7;
+    this._autoPauseMotion = true;
+    this._onKeyDown = (ev) => {
+      if (ev.key === "Escape") this.close();
+    };
+  }
+
+  open(hass) {
+    this._hass = hass;
+    this._loading = true;
+    this._saving = false;
+    this._error = "";
+    this._savedMsg = "";
+    this._entitySearch = "";
+    this._autoSearch = "";
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    this.style.display = "block";
+    window.addEventListener("keydown", this._onKeyDown);
+    this._renderBody();
+    this._loadConfig();
+  }
+
+  close() {
+    window.removeEventListener("keydown", this._onKeyDown);
+    this.style.display = "none";
+  }
+
+  async _loadConfig() {
+    if (!this._hass) return;
+    try {
+      const data = await this._hass.callApi("GET", "wohnsinnig_vernetzt/presence_config");
+      this._selectedEntities = new Set(data.presence_entities || []);
+      this._selectedAutomations = new Set(data.presence_pause_automations || []);
+      this._jitterMinutes = Number.isFinite(data.presence_jitter_minutes)
+        ? data.presence_jitter_minutes
+        : 7;
+      this._autoPauseMotion = data.presence_auto_pause_motion !== false;
+      this._availableEntities = Array.isArray(data.available_entities)
+        ? data.available_entities
+        : [];
+      this._availableAutomations = Array.isArray(data.available_automations)
+        ? data.available_automations
+        : [];
+      this._loading = false;
+      this._error = "";
+      this._renderBody();
+    } catch (err) {
+      this._loading = false;
+      this._error =
+        err?.body?.error || err?.message || "Konfiguration konnte nicht geladen werden.";
+      this._renderBody();
+    }
+  }
+
+  async _saveConfig() {
+    if (!this._hass || this._saving) return;
+    this._saving = true;
+    this._error = "";
+    this._savedMsg = "";
+    this._updateFooter();
+
+    try {
+      await this._hass.callApi("POST", "wohnsinnig_vernetzt/presence_config", {
+        presence_entities: Array.from(this._selectedEntities),
+        presence_jitter_minutes: this._jitterMinutes,
+        presence_auto_pause_motion: this._autoPauseMotion,
+        presence_pause_automations: Array.from(this._selectedAutomations),
+      });
+      this._saving = false;
+      this._savedMsg = "Gespeichert! Integration übernimmt die neue Auswahl…";
+      this._updateFooter();
+      setTimeout(() => this.close(), 900);
+    } catch (err) {
+      this._saving = false;
+      this._error =
+        err?.body?.error || err?.message || "Speichern fehlgeschlagen.";
+      this._updateFooter();
+    }
+  }
+
+  _updateFooter() {
+    const statusEl = this.shadowRoot.getElementById("dlg-status");
+    const saveBtn = this.shadowRoot.getElementById("dlg-save");
+    if (statusEl) {
+      if (this._error) {
+        statusEl.textContent = this._error;
+        statusEl.className = "dlg-status error";
+        statusEl.style.display = "block";
+      } else if (this._savedMsg) {
+        statusEl.textContent = this._savedMsg;
+        statusEl.className = "dlg-status ok";
+        statusEl.style.display = "block";
+      } else {
+        statusEl.style.display = "none";
+      }
+    }
+    if (saveBtn) {
+      saveBtn.disabled = this._loading || this._saving;
+      saveBtn.textContent = this._saving ? "Speichert…" : "Speichern";
+    }
+  }
+
+  _renderEntityChecklist() {
+    const wrap = this.shadowRoot.getElementById("dlg-ent-list");
+    const countEl = this.shadowRoot.getElementById("dlg-ent-count");
+    if (countEl) {
+      countEl.textContent = `${this._selectedEntities.size} gewählt`;
+    }
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    const q = this._entitySearch.trim().toLowerCase();
+    const sorted = [...this._availableEntities].sort((a, b) => {
+      const aSel = this._selectedEntities.has(a.entity_id) ? 0 : 1;
+      const bSel = this._selectedEntities.has(b.entity_id) ? 0 : 1;
+      if (aSel !== bSel) return aSel - bSel;
+      return a.name.localeCompare(b.name, "de");
+    });
+
+    const filtered = sorted.filter(
+      (item) =>
+        !q ||
+        item.name.toLowerCase().includes(q) ||
+        item.entity_id.toLowerCase().includes(q)
+    );
+
+    if (!filtered.length) {
+      const empty = document.createElement("div");
+      empty.className = "dlg-empty";
+      empty.textContent = "Keine passende Lampe oder Steckdose gefunden.";
+      wrap.appendChild(empty);
+      return;
+    }
+
+    filtered.forEach((item) => {
+      const label = document.createElement("label");
+      label.className = `dlg-check-item ${this._selectedEntities.has(item.entity_id) ? "selected" : ""}`;
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = this._selectedEntities.has(item.entity_id);
+      cb.addEventListener("change", () => {
+        if (cb.checked) {
+          this._selectedEntities.add(item.entity_id);
+        } else {
+          this._selectedEntities.delete(item.entity_id);
+        }
+        label.classList.toggle("selected", cb.checked);
+        const cEl = this.shadowRoot.getElementById("dlg-ent-count");
+        if (cEl) cEl.textContent = `${this._selectedEntities.size} gewählt`;
+      });
+
+      const icon = document.createElement("span");
+      icon.className = "dlg-item-icon";
+      icon.textContent = item.domain === "light" ? "💡" : "🔌";
+
+      const txt = document.createElement("div");
+      txt.className = "dlg-item-txt";
+      const n = document.createElement("div");
+      n.className = "dlg-item-name";
+      n.textContent = item.name;
+      const sub = document.createElement("div");
+      sub.className = "dlg-item-sub";
+      sub.textContent = item.entity_id;
+      txt.appendChild(n);
+      txt.appendChild(sub);
+
+      label.appendChild(cb);
+      label.appendChild(icon);
+      label.appendChild(txt);
+      wrap.appendChild(label);
+    });
+  }
+
+  _renderAutoChecklist() {
+    const wrap = this.shadowRoot.getElementById("dlg-auto-list");
+    const countEl = this.shadowRoot.getElementById("dlg-auto-count");
+    if (countEl) {
+      countEl.textContent = `${this._selectedAutomations.size} gewählt`;
+    }
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    const q = this._autoSearch.trim().toLowerCase();
+    const sorted = [...this._availableAutomations].sort((a, b) => {
+      const aSel = this._selectedAutomations.has(a.entity_id) ? 0 : 1;
+      const bSel = this._selectedAutomations.has(b.entity_id) ? 0 : 1;
+      if (aSel !== bSel) return aSel - bSel;
+      return a.name.localeCompare(b.name, "de");
+    });
+
+    const filtered = sorted.filter(
+      (item) =>
+        !q ||
+        item.name.toLowerCase().includes(q) ||
+        item.entity_id.toLowerCase().includes(q)
+    );
+
+    if (!filtered.length) {
+      const empty = document.createElement("div");
+      empty.className = "dlg-empty";
+      empty.textContent = "Keine passende Automation gefunden.";
+      wrap.appendChild(empty);
+      return;
+    }
+
+    filtered.forEach((item) => {
+      const label = document.createElement("label");
+      label.className = `dlg-check-item ${this._selectedAutomations.has(item.entity_id) ? "selected" : ""}`;
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = this._selectedAutomations.has(item.entity_id);
+      cb.addEventListener("change", () => {
+        if (cb.checked) {
+          this._selectedAutomations.add(item.entity_id);
+        } else {
+          this._selectedAutomations.delete(item.entity_id);
+        }
+        label.classList.toggle("selected", cb.checked);
+        const cEl = this.shadowRoot.getElementById("dlg-auto-count");
+        if (cEl) cEl.textContent = `${this._selectedAutomations.size} gewählt`;
+      });
+
+      const txt = document.createElement("div");
+      txt.className = "dlg-item-txt";
+      const n = document.createElement("div");
+      n.className = "dlg-item-name";
+      n.textContent = item.name;
+      const sub = document.createElement("div");
+      sub.className = "dlg-item-sub";
+      sub.textContent = item.entity_id;
+      txt.appendChild(n);
+      txt.appendChild(sub);
+
+      label.appendChild(cb);
+      label.appendChild(txt);
+      wrap.appendChild(label);
+    });
+  }
+
+  _renderBody() {
+    const loadingEl = this.shadowRoot.getElementById("dlg-loading");
+    const formEl = this.shadowRoot.getElementById("dlg-form");
+    const jitterInput = this.shadowRoot.getElementById("dlg-jitter");
+    const autoPauseCb = this.shadowRoot.getElementById("dlg-autopause");
+    const entSearch = this.shadowRoot.getElementById("dlg-ent-search");
+    const autoSearch = this.shadowRoot.getElementById("dlg-auto-search");
+
+    if (loadingEl) loadingEl.style.display = this._loading ? "block" : "none";
+    if (formEl) formEl.style.display = this._loading ? "none" : "block";
+
+    if (!this._loading) {
+      if (jitterInput) jitterInput.value = String(this._jitterMinutes);
+      if (autoPauseCb) autoPauseCb.checked = this._autoPauseMotion;
+      if (entSearch) entSearch.value = this._entitySearch;
+      if (autoSearch) autoSearch.value = this._autoSearch;
+      this._renderEntityChecklist();
+      this._renderAutoChecklist();
+    }
+    this._updateFooter();
+  }
+
+  _renderShell() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host {
+          position: fixed;
+          inset: 0;
+          z-index: 9999;
+          display: none;
+          font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif);
+        }
+        .backdrop {
+          position: fixed;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.58);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 16px;
+          box-sizing: border-box;
+        }
+        .modal {
+          width: 100%;
+          max-width: 520px;
+          max-height: 88vh;
+          background: var(--card-background-color, #1c1c1c);
+          color: var(--primary-text-color, #e1e1e1);
+          border-radius: 16px;
+          box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+          border: 1px solid var(--divider-color, rgba(255,255,255,0.12));
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
+        .modal-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 16px 18px;
+          border-bottom: 1px solid var(--divider-color, rgba(255,255,255,0.12));
+        }
+        .modal-title {
+          font-size: 16px;
+          font-weight: 600;
+        }
+        .close-btn {
+          background: none;
+          border: none;
+          color: var(--secondary-text-color, #9b9b9b);
+          font-size: 18px;
+          cursor: pointer;
+          padding: 4px 8px;
+          border-radius: 8px;
+        }
+        .close-btn:hover {
+          background: var(--secondary-background-color, rgba(255,255,255,0.08));
+          color: var(--primary-text-color);
+        }
+        .modal-body {
+          padding: 14px 18px;
+          overflow-y: auto;
+          flex: 1;
+        }
+        .dlg-loading {
+          text-align: center;
+          padding: 28px 8px;
+          color: var(--secondary-text-color);
+          font-size: 13px;
+        }
+        .section {
+          margin-bottom: 16px;
+        }
+        .section-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 6px;
+        }
+        .section-label {
+          font-size: 13px;
+          font-weight: 600;
+        }
+        .section-count {
+          font-size: 11px;
+          color: var(--primary-color, #03a9f4);
+          font-weight: 600;
+        }
+        .dlg-search {
+          width: 100%;
+          box-sizing: border-box;
+          padding: 8px 10px;
+          border-radius: 8px;
+          border: 1px solid var(--divider-color, rgba(255,255,255,0.15));
+          background: var(--secondary-background-color, #282828);
+          color: var(--primary-text-color);
+          font-family: inherit;
+          font-size: 13px;
+          margin-bottom: 6px;
+        }
+        .dlg-list {
+          max-height: 175px;
+          overflow-y: auto;
+          border: 1px solid var(--divider-color, rgba(255,255,255,0.12));
+          border-radius: 10px;
+          padding: 4px;
+          background: var(--secondary-background-color, rgba(255,255,255,0.03));
+        }
+        .dlg-check-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 6px 8px;
+          border-radius: 8px;
+          cursor: pointer;
+        }
+        .dlg-check-item:hover {
+          background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.08);
+        }
+        .dlg-check-item.selected {
+          background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.14);
+        }
+        .dlg-item-icon {
+          font-size: 14px;
+          flex-shrink: 0;
+        }
+        .dlg-item-txt {
+          min-width: 0;
+          flex: 1;
+        }
+        .dlg-item-name {
+          font-size: 13px;
+          font-weight: 500;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .dlg-item-sub {
+          font-size: 11px;
+          color: var(--secondary-text-color);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .dlg-empty {
+          font-size: 12px;
+          color: var(--secondary-text-color);
+          text-align: center;
+          padding: 12px 6px;
+        }
+        .inline-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 8px 10px;
+          border-radius: 10px;
+          background: var(--secondary-background-color, rgba(255,255,255,0.04));
+          margin-bottom: 10px;
+        }
+        .inline-row label {
+          font-size: 13px;
+          cursor: pointer;
+        }
+        .jitter-input {
+          width: 72px;
+          padding: 6px 8px;
+          border-radius: 8px;
+          border: 1px solid var(--divider-color);
+          background: var(--card-background-color);
+          color: var(--primary-text-color);
+          font-size: 13px;
+          text-align: center;
+        }
+        .dlg-status {
+          display: none;
+          margin: 0 18px 10px;
+          padding: 8px 10px;
+          border-radius: 8px;
+          font-size: 12px;
+        }
+        .dlg-status.ok {
+          color: var(--success-color, #4caf50);
+          background: rgba(76, 175, 80, 0.14);
+        }
+        .dlg-status.error {
+          color: var(--error-color, #db4437);
+          background: rgba(219, 68, 55, 0.14);
+        }
+        .modal-foot {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          padding: 12px 18px;
+          border-top: 1px solid var(--divider-color, rgba(255,255,255,0.12));
+        }
+        .foot-link {
+          font-size: 12px;
+          color: var(--primary-color, #03a9f4);
+          text-decoration: none;
+        }
+        .foot-btns {
+          display: flex;
+          gap: 8px;
+        }
+        .btn {
+          border: none;
+          border-radius: 8px;
+          padding: 8px 14px;
+          font-family: inherit;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        .btn.secondary {
+          background: var(--secondary-background-color);
+          color: var(--primary-text-color);
+        }
+        .btn.primary {
+          background: var(--primary-color, #03a9f4);
+          color: var(--text-primary-color, #fff);
+        }
+        .btn:disabled {
+          opacity: 0.55;
+          cursor: default;
+        }
+      </style>
+      <div id="dlg-backdrop" class="backdrop">
+        <div class="modal" role="dialog" aria-modal="true">
+          <div class="modal-head">
+            <div class="modal-title">🏠 Anwesenheitssimulation konfigurieren</div>
+            <button id="dlg-close" class="close-btn" type="button" aria-label="Schließen">✕</button>
+          </div>
+
+          <div class="modal-body">
+            <div id="dlg-loading" class="dlg-loading">Lade Lampen, Schalter & Automationen…</div>
+            <div id="dlg-form" style="display:none;">
+              <div class="section">
+                <div class="section-head">
+                  <span class="section-label">Lampen & Schalter (14-Tage-Verlauf)</span>
+                  <span id="dlg-ent-count" class="section-count">0 gewählt</span>
+                </div>
+                <input id="dlg-ent-search" class="dlg-search" type="search" placeholder="Lampe oder Schalter suchen…" />
+                <div id="dlg-ent-list" class="dlg-list"></div>
+              </div>
+
+              <div class="inline-row">
+                <label for="dlg-jitter">Organische Zufalls-Abweichung (± Minuten)</label>
+                <input id="dlg-jitter" class="jitter-input" type="number" min="0" max="30" value="7" />
+              </div>
+
+              <div class="inline-row">
+                <label for="dlg-autopause">Bewegungsmelder-Automationen automatisch pausieren</label>
+                <input id="dlg-autopause" type="checkbox" checked />
+              </div>
+
+              <div class="section" style="margin-bottom:0;">
+                <div class="section-head">
+                  <span class="section-label">Zusätzlich zu pausierende Automationen (optional)</span>
+                  <span id="dlg-auto-count" class="section-count">0 gewählt</span>
+                </div>
+                <input id="dlg-auto-search" class="dlg-search" type="search" placeholder="Bewegungsmelder-Automation suchen…" />
+                <div id="dlg-auto-list" class="dlg-list"></div>
+              </div>
+            </div>
+          </div>
+
+          <div id="dlg-status" class="dlg-status"></div>
+
+          <div class="modal-foot">
+            <a id="dlg-ext-link" class="foot-link" href="/config/integrations/integration/wohnsinnig_vernetzt">Alle Optionen ↗</a>
+            <div class="foot-btns">
+              <button id="dlg-cancel" class="btn secondary" type="button">Abbrechen</button>
+              <button id="dlg-save" class="btn primary" type="button">Speichern</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    this.shadowRoot.getElementById("dlg-backdrop").addEventListener("click", (ev) => {
+      if (ev.target.id === "dlg-backdrop") this.close();
+    });
+    this.shadowRoot.getElementById("dlg-close").addEventListener("click", () => this.close());
+    this.shadowRoot.getElementById("dlg-cancel").addEventListener("click", () => this.close());
+    this.shadowRoot.getElementById("dlg-ext-link").addEventListener("click", () => this.close());
+    this.shadowRoot.getElementById("dlg-save").addEventListener("click", () => this._saveConfig());
+
+    this.shadowRoot.getElementById("dlg-ent-search").addEventListener("input", (ev) => {
+      this._entitySearch = ev.target.value || "";
+      this._renderEntityChecklist();
+    });
+    this.shadowRoot.getElementById("dlg-auto-search").addEventListener("input", (ev) => {
+      this._autoSearch = ev.target.value || "";
+      this._renderAutoChecklist();
+    });
+    this.shadowRoot.getElementById("dlg-jitter").addEventListener("change", (ev) => {
+      const val = parseInt(ev.target.value, 10);
+      this._jitterMinutes = Number.isFinite(val) ? Math.max(0, Math.min(30, val)) : 7;
+    });
+    this.shadowRoot.getElementById("dlg-autopause").addEventListener("change", (ev) => {
+      this._autoPauseMotion = Boolean(ev.target.checked);
+    });
+  }
+}
+
+if (!customElements.get("wohnsinnig-vernetzt-presence-config-dialog")) {
+  customElements.define(
+    "wohnsinnig-vernetzt-presence-config-dialog",
+    WohnsinnigVernetztPresenceConfigDialog
+  );
+}
+
+window.__wvOpenPresenceConfigDialog = function (hass) {
+  const activeHass = hass || document.querySelector("home-assistant")?.hass;
+  if (!activeHass) return;
+  let dlg = document.getElementById("wv-presence-config-dialog");
+  if (!dlg) {
+    dlg = document.createElement("wohnsinnig-vernetzt-presence-config-dialog");
+    dlg.id = "wv-presence-config-dialog";
+    document.body.appendChild(dlg);
+  }
+  dlg.open(activeHass);
+};
+
+// Globaler Event-Bridge-Listener: fängt Klicks auf den Button "Konfiguration öffnen" auf jeder HA-Seite ab
+if (!window.__wvConfigBridgeInitialized) {
+  window.__wvConfigBridgeInitialized = true;
+  let subscribedConn = null;
+
+  const ensureBridge = () => {
+    const ha = document.querySelector("home-assistant");
+    const hass = ha && ha.hass;
+    const conn = hass && hass.connection;
+    if (!conn || conn === subscribedConn) return;
+    subscribedConn = conn;
+    conn
+      .subscribeEvents((ev) => {
+        if (document.visibilityState !== "visible") return;
+        const currentHass = document.querySelector("home-assistant")?.hass;
+        const evUser = ev?.data?.user_id;
+        const curUser = currentHass?.user?.id;
+        if (evUser && curUser && evUser !== curUser) return;
+        if (ev?.data?.section === "presence") {
+          window.__wvOpenPresenceConfigDialog(currentHass);
+        }
+      }, "wohnsinnig_vernetzt_open_config")
+      .catch(() => {
+        subscribedConn = null;
+      });
+  };
+
+  setInterval(ensureBridge, 2500);
+  ensureBridge();
 }
