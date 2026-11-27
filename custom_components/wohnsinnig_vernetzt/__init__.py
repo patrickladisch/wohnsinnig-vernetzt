@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from aiohttp import web
@@ -125,6 +126,21 @@ from .presence_sensors import (
     get_presence_sensor_candidates,
     normalize_presence_sensor_defs,
 )
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _get_coordinator(hass: HomeAssistant) -> WohnsinnigVernetztCoordinator | None:
+    """Findet den aktiven Coordinator robust über hass.data."""
+    domain_data = hass.data.get(DOMAIN, {})
+    coord = domain_data.get("coordinator")
+    if isinstance(coord, WohnsinnigVernetztCoordinator):
+        return coord
+    for val in domain_data.values():
+        if isinstance(val, WohnsinnigVernetztCoordinator):
+            return val
+    return None
+
 
 PLATFORMS: list[Platform] = [
     Platform.MEDIA_PLAYER,
@@ -403,16 +419,13 @@ class WohnsinnigVernetztPresenceConfigView(HomeAssistantView):
 
     async def get(self, request: web.Request) -> web.Response:
         hass: HomeAssistant = request.app["hass"]
-        domain_data = hass.data.get(DOMAIN, {})
-        coordinator: WohnsinnigVernetztCoordinator | None = domain_data.get(
-            "coordinator"
-        )
+        coordinator = _get_coordinator(hass)
         if coordinator is None:
             return self.json({"error": "Integration nicht geladen."}, status_code=503)
 
         pm = coordinator.presence_manager
         lights_switches: list[dict] = []
-        for st in hass.states.async_all(["light", "switch"]):
+        for st in [*hass.states.async_all("light"), *hass.states.async_all("switch")]:
             if f".{DOMAIN}" in st.entity_id:
                 continue
             attrs = st.attributes or {}
@@ -500,62 +513,68 @@ class WohnsinnigVernetztWakeUpConfigView(HomeAssistantView):
     requires_auth = True
 
     async def get(self, request: web.Request) -> web.Response:
-        hass: HomeAssistant = request.app["hass"]
-        domain_data = hass.data.get(DOMAIN, {})
-        coordinator: WohnsinnigVernetztCoordinator | None = domain_data.get(
-            "coordinator"
-        )
-        if coordinator is None:
-            return self.json({"error": "Integration nicht geladen."}, status_code=503)
+        try:
+            hass: HomeAssistant = request.app["hass"]
+            coordinator = _get_coordinator(hass)
+            if coordinator is None:
+                return self.json({"error": "Integration nicht geladen."}, status_code=503)
 
-        wm = coordinator.wakeup_manager
-        lights: list[dict] = []
-        for st in hass.states.async_all("light"):
-            if f".{DOMAIN}" in st.entity_id:
-                continue
-            attrs = st.attributes or {}
-            if attrs.get("restored") is True:
-                continue
-            lights.append(
+            wm = coordinator.wakeup_manager
+            lights: list[dict] = []
+            for st in hass.states.async_all("light"):
+                if f".{DOMAIN}" in st.entity_id:
+                    continue
+                attrs = st.attributes or {}
+                if attrs.get("restored") is True:
+                    continue
+                lights.append(
+                    {
+                        "entity_id": st.entity_id,
+                        "name": str(attrs.get("friendly_name") or st.entity_id).strip(),
+                        "state": st.state,
+                    }
+                )
+            lights.sort(key=lambda item: (item["name"].lower(), item["entity_id"]))
+
+            automations: list[dict] = []
+            for st in hass.states.async_all("automation"):
+                attrs = st.attributes or {}
+                automations.append(
+                    {
+                        "entity_id": st.entity_id,
+                        "name": str(attrs.get("friendly_name") or st.entity_id).strip(),
+                        "state": st.state,
+                    }
+                )
+            automations.sort(key=lambda item: (item["name"].lower(), item["entity_id"]))
+
+            try:
+                alarm_sensors = get_alarm_sensor_candidates(hass, wm.alarm_entity)
+            except Exception as alarm_err:
+                _LOGGER.warning("Wake-Up Wecker-Erkennung fehlgeschlagen: %s", alarm_err)
+                alarm_sensors = []
+
+            return self.json(
                 {
-                    "entity_id": st.entity_id,
-                    "name": str(attrs.get("friendly_name") or st.entity_id).strip(),
-                    "state": st.state,
+                    "enabled": wm.enabled,
+                    "wakeup_entities": list(wm.entities),
+                    "wakeup_alarm_entity": wm.alarm_entity,
+                    "available_alarm_sensors": alarm_sensors,
+                    "wakeup_mode": wm.mode,
+                    "wakeup_time": wm.wakeup_time,
+                    "wakeup_duration": wm.duration_minutes,
+                    "wakeup_auto_off_minutes": wm.auto_off_minutes,
+                    "wakeup_days": wm.weekdays,
+                    "wakeup_auto_pause": wm.auto_pause,
+                    "wakeup_pause_automations": list(wm.manual_pause_automations),
+                    "wakeup_sunrise_color": wm.sunrise_color,
+                    "available_lights": lights,
+                    "available_automations": automations,
                 }
             )
-        lights.sort(key=lambda item: (item["name"].lower(), item["entity_id"]))
-
-        automations: list[dict] = []
-        for st in hass.states.async_all("automation"):
-            attrs = st.attributes or {}
-            automations.append(
-                {
-                    "entity_id": st.entity_id,
-                    "name": str(attrs.get("friendly_name") or st.entity_id).strip(),
-                    "state": st.state,
-                }
-            )
-        automations.sort(key=lambda item: (item["name"].lower(), item["entity_id"]))
-
-        alarm_sensors = get_alarm_sensor_candidates(hass, wm.alarm_entity)
-        return self.json(
-            {
-                "enabled": wm.enabled,
-                "wakeup_entities": list(wm.entities),
-                "wakeup_alarm_entity": wm.alarm_entity,
-                "available_alarm_sensors": alarm_sensors,
-                "wakeup_mode": wm.mode,
-                "wakeup_time": wm.wakeup_time,
-                "wakeup_duration": wm.duration_minutes,
-                "wakeup_auto_off_minutes": wm.auto_off_minutes,
-                "wakeup_days": wm.weekdays,
-                "wakeup_auto_pause": wm.auto_pause,
-                "wakeup_pause_automations": list(wm.manual_pause_automations),
-                "wakeup_sunrise_color": wm.sunrise_color,
-                "available_lights": lights,
-                "available_automations": automations,
-            }
-        )
+        except Exception as err:
+            _LOGGER.exception("Fehler in wakeup_config GET")
+            return self.json({"error": f"Serverfehler: {err}"}, status_code=500)
 
     async def post(self, request: web.Request) -> web.Response:
         hass: HomeAssistant = request.app["hass"]
@@ -812,18 +831,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             [StaticPathConfig(CARD_URL_BASE, str(www_path), cache_headers=False)]
         )
         add_extra_js_url(hass, f"{CARD_URL_BASE}/{CARD_FILENAME}?v={VERSION}")
-        hass.http.register_view(WohnsinnigVernetztEpisodesView())
-        hass.http.register_view(WohnsinnigVernetztPlayerStateView())
-        hass.http.register_view(WohnsinnigVernetztImportBlueprintView())
-        hass.http.register_view(WohnsinnigVernetztBatteryCheckView())
-        hass.http.register_view(WohnsinnigVernetztSilentSensorsView())
-        hass.http.register_view(WohnsinnigVernetztBatteryExclusionsView())
-        hass.http.register_view(WohnsinnigVernetztPresenceConfigView())
-        hass.http.register_view(WohnsinnigVernetztWakeUpConfigView())
-        hass.http.register_view(WohnsinnigVernetztPvConfigView())
-        hass.http.register_view(WohnsinnigVernetztPvTriggerView())
-        hass.http.register_view(WohnsinnigVernetztPresenceSensorsConfigView())
         domain_data["frontend_registered"] = True
+
+    registered_views: set[str] = domain_data.setdefault("registered_views", set())
+    for view_cls in (
+        WohnsinnigVernetztEpisodesView,
+        WohnsinnigVernetztPlayerStateView,
+        WohnsinnigVernetztImportBlueprintView,
+        WohnsinnigVernetztBatteryCheckView,
+        WohnsinnigVernetztSilentSensorsView,
+        WohnsinnigVernetztBatteryExclusionsView,
+        WohnsinnigVernetztPresenceConfigView,
+        WohnsinnigVernetztWakeUpConfigView,
+        WohnsinnigVernetztPvConfigView,
+        WohnsinnigVernetztPvTriggerView,
+        WohnsinnigVernetztPresenceSensorsConfigView,
+    ):
+        if view_cls.name not in registered_views:
+            hass.http.register_view(view_cls())
+            registered_views.add(view_cls.name)
 
     config = {**entry.data, **entry.options}
     raw_notify = config.get(

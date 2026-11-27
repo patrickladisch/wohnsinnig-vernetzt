@@ -20,7 +20,7 @@ def _mobile_app_device_names(hass: HomeAssistant) -> dict[str, str]:
     try:
         dev_reg = dr.async_get(hass)
         for device in dev_reg.devices.values():
-            if not any(domain == "mobile_app" for domain, _ in device.identifiers):
+            if not any(isinstance(i, (tuple, list)) and len(i) >= 1 and i[0] == "mobile_app" for i in (device.identifiers or ())):
                 continue
             friendly = (device.name_by_user or device.name or "").strip()
             if not friendly:

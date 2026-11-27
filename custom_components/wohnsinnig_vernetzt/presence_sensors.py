@@ -260,9 +260,10 @@ def get_presence_sensor_candidates(
     detected_ssids: list[str] = []
     seen_ssids: set[str] = set()
 
-    for st in hass.states.async_all(
-        ["person", "device_tracker", "sensor", "binary_sensor", "input_boolean", "switch"]
-    ):
+    all_states = []
+    for _dom in ("person", "device_tracker", "sensor", "binary_sensor", "input_boolean", "switch"):
+        all_states.extend(hass.states.async_all(_dom))
+    for st in all_states:
         eid = st.entity_id
         if f".{DOMAIN}" in eid:
             continue

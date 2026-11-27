@@ -31,9 +31,13 @@ async def async_get_triggers(
     device = dev_reg.async_get(device_id)
     if device is not None:
         is_sub_device = any(
-            domain == DOMAIN
-            and ident.endswith(("_presence", "_blueprints", "_checks", "_wakeup", "_pv", "_presence_sensors"))
-            for domain, ident in device.identifiers
+            isinstance(pair, (tuple, list))
+            and len(pair) >= 2
+            and pair[0] == DOMAIN
+            and str(pair[1]).endswith(
+                ("_presence", "_blueprints", "_checks", "_wakeup", "_pv", "_presence_sensors")
+            )
+            for pair in (device.identifiers or ())
         )
         if is_sub_device:
             return []

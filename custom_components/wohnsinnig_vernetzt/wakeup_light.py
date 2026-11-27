@@ -247,6 +247,16 @@ def parse_alarm_sensor_datetime(
     return alarm_local
 
 
+def _has_mobile_app_identifier(identifiers: object) -> bool:
+    """Prüft sicher, ob ein Device-Identifier zu mobile_app gehört (ohne Tuple-Unpack-Crash)."""
+    if not identifiers:
+        return False
+    for ident in identifiers:
+        if isinstance(ident, (tuple, list)) and len(ident) >= 1 and ident[0] == "mobile_app":
+            return True
+    return False
+
+
 def get_alarm_sensor_candidates(
     hass: HomeAssistant, current_entity: str = ""
 ) -> list[dict[str, Any]]:
@@ -267,80 +277,99 @@ def get_alarm_sensor_candidates(
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    for st in hass.states.async_all(["sensor", "input_datetime"]):
-        eid = st.entity_id
-        if f".{DOMAIN}" in eid:
-            continue
-        attrs = st.attributes or {}
-        if attrs.get("restored") is True:
-            continue
+    all_states = [
+        *hass.states.async_all("sensor"),
+        *hass.states.async_all("input_datetime"),
+    ]
 
-        domain = eid.split(".", 1)[0]
-        dc = str(attrs.get("device_class") or "").lower()
-        friendly = str(attrs.get("friendly_name") or eid).strip()
-        low_id = eid.lower()
-        low_name = friendly.lower()
+    for st in all_states:
+        try:
+            eid = st.entity_id
+            if f".{DOMAIN}" in eid:
+                continue
+            attrs = st.attributes or {}
+            if attrs.get("restored") is True:
+                continue
 
-        reg_entry = ent_reg.async_get(eid) if ent_reg is not None else None
-        platform = (reg_entry.platform or "").lower() if reg_entry else ""
+            domain = eid.split(".", 1)[0]
+            dc = str(attrs.get("device_class") or "").lower()
+            friendly = str(attrs.get("friendly_name") or eid).strip()
+            low_id = eid.lower()
+            low_name = friendly.lower()
 
-        device_name = ""
-        is_mobile_app = platform == "mobile_app"
-        if reg_entry and reg_entry.device_id and dev_reg is not None:
-            dev = dev_reg.async_get(reg_entry.device_id)
-            if dev is not None:
-                device_name = (dev.name_by_user or dev.name or "").strip()
-                if any(ident_dom == "mobile_app" for ident_dom, _ in dev.identifiers):
-                    is_mobile_app = True
+            reg_entry = ent_reg.async_get(eid) if ent_reg is not None else None
+            platform = (reg_entry.platform or "").lower() if reg_entry else ""
 
-        tier: int | None = None
-        if domain == "sensor" and dc == "timestamp":
-            if is_mobile_app and ("alarm" in low_id or "wecker" in low_name or "alarm" in low_name):
-                tier = 0  # Handy-Wecker (Companion App)
-            elif "next_alarm" in low_id or "alarm" in low_id or "wecker" in low_name:
-                tier = 1  # Sonstiger Next-Alarm-Sensor (z. B. Echo, Google Home)
-        elif domain == "input_datetime" and bool(attrs.get("has_time", True)):
-            if any(k in low_id or k in low_name for k in ("wecker", "alarm", "wake", "aufwach")):
-                tier = 2  # Expliziter Wecker-Helfer (z. B. iOS Shortcut)
+            device_name = ""
+            is_mobile_app = platform == "mobile_app"
+            if reg_entry and reg_entry.device_id and dev_reg is not None:
+                dev = dev_reg.async_get(reg_entry.device_id)
+                if dev is not None:
+                    device_name = (dev.name_by_user or dev.name or "").strip()
+                    if _has_mobile_app_identifier(getattr(dev, "identifiers", None)):
+                        is_mobile_app = True
+
+            tier: int | None = None
+            is_alarm_named = (
+                "next_alarm" in low_id
+                or "naechster_wecker" in low_id
+                or "alarm" in low_id
+                or "wecker" in low_name
+                or "alarm" in low_name
+            )
+            if domain == "sensor" and (dc == "timestamp" or "next_alarm" in low_id or "naechster_wecker" in low_id):
+                if is_mobile_app and is_alarm_named:
+                    tier = 0  # Handy-Wecker (Companion App)
+                elif is_alarm_named:
+                    tier = 1  # Sonstiger Next-Alarm-Sensor (z. B. Echo, Google Home)
+            elif domain == "input_datetime" and bool(attrs.get("has_time", True)):
+                if any(k in low_id or k in low_name for k in ("wecker", "alarm", "wake", "aufwach")):
+                    tier = 2  # Expliziter Wecker-Helfer (z. B. iOS Shortcut)
+                else:
+                    tier = 3  # Allgemeiner Zeit-Helfer
+
+            if tier is None and eid == current_entity:
+                tier = 4
+            if tier is None:
+                continue
+
+            alarm_dt = parse_alarm_sensor_datetime(st, now_local=now)
+            alarm_preview = alarm_dt.strftime("%d.%m. %H:%M") if alarm_dt else "Kein Wecker"
+
+            if tier == 0:
+                short_name = (
+                    device_name
+                    or friendly.replace("Next alarm", "").replace("Nächster Wecker", "").strip(" -:")
+                    or eid
+                )
+                display_label = f"📱 {short_name} ({alarm_preview})"
+                compact_name = f"📱 {short_name}"
+            elif tier == 1:
+                short_name = device_name or friendly
+                display_label = f"⏰ {short_name} ({alarm_preview})"
+                compact_name = f"⏰ {short_name}"
             else:
-                tier = 3  # Allgemeiner Zeit-Helfer
+                short_name = friendly
+                display_label = f"📅 {short_name} ({alarm_preview})"
+                compact_name = f"📅 {short_name}"
 
-        # Falls der aktuell gespeicherte Sensor nicht ins Raster fällt, trotzdem behalten
-        if tier is None and eid == current_entity:
-            tier = 4
-        if tier is None:
+            candidates.append(
+                {
+                    "entity_id": eid,
+                    "tier": tier,
+                    "name": short_name,
+                    "friendly_name": friendly,
+                    "display_label": display_label,
+                    "compact_name": compact_name,
+                    "alarm_preview": alarm_preview,
+                    "has_alarm": alarm_dt is not None,
+                    "is_mobile_app": is_mobile_app,
+                }
+            )
+            seen.add(eid)
+        except Exception as err:
+            _LOGGER.debug("Wecker-Kandidat übersprungen: %s", err)
             continue
-
-        alarm_dt = parse_alarm_sensor_datetime(st, now_local=now)
-        alarm_preview = alarm_dt.strftime("%d.%m. %H:%M") if alarm_dt else "Kein Wecker"
-
-        if tier == 0:
-            short_name = device_name or friendly.replace("Next alarm", "").replace("Nächster Wecker", "").strip(" -:") or eid
-            display_label = f"📱 {short_name} ({alarm_preview})"
-            compact_name = f"📱 {short_name}"
-        elif tier == 1:
-            short_name = device_name or friendly
-            display_label = f"⏰ {short_name} ({alarm_preview})"
-            compact_name = f"⏰ {short_name}"
-        else:
-            short_name = friendly
-            display_label = f"📅 {short_name} ({alarm_preview})"
-            compact_name = f"📅 {short_name}"
-
-        candidates.append(
-            {
-                "entity_id": eid,
-                "tier": tier,
-                "name": short_name,
-                "friendly_name": friendly,
-                "display_label": display_label,
-                "compact_name": compact_name,
-                "alarm_preview": alarm_preview,
-                "has_alarm": alarm_dt is not None,
-                "is_mobile_app": is_mobile_app,
-            }
-        )
-        seen.add(eid)
 
     if current_entity and current_entity not in seen:
         candidates.append(

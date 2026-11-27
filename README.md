@@ -2,7 +2,7 @@
 
 Die offizielle Smart-Home-Integration zum Podcast **Wohnsinnig vernetzt** (von Niels und Patrick – [wohnsinnigvernetzt.de](https://www.wohnsinnigvernetzt.de)).
 
-## Features (v2.10.1)
+## Features (v2.10.2)
 - **Kombinierte Anwesenheitssensoren (Personen & Alarmanlage):** Erstelle beliebig viele eigene `binary_sensor`-Entitäten (z. B. für dich, Frau, Kind) plus den automatischen Sammel-Sensor `Jemand zuhause`. Kombiniert GPS/Person, WLAN (Router-Tracker oder Handy-SSID), Bewegungsmelder-Timeout (keine Bewegung seit X Min) und optionale Extras – perfekt als fehlalarmfreier Auslöser für Alarmanlagen.
 - **PV-Überschuss & Solar-Manager:** Führt bei PV-Überschuss (Watt) und/oder PV-Akku-Füllstand (%) beliebig viele konfigurierbare Aktionen aus (Steckdosen für Werkzeug-Akkus, Geschirrspüler, Wallbox, Skripte, Szenen) – inkl. Wolkenfilter, Hysterese, Auto-Aus und 1×-pro-Tag-Modus.
 - **Wake-Up Light (Sonnenaufgang 0 % → 100 %):** Wähle eine oder mehrere Lampen, verknüpfe direkt deinen **Handy-Wecker (Next Alarm Sensor)** oder definiere eine feste Zielzeit (100 % um) bzw. Startzeit sowie die Dimm-Dauer (z. B. 30 Min) und optional eine **Auto-Aus-Zeit** nach Erreichen von 100 %. Betroffene Lampen-Automationen werden während des Dimmens automatisch deaktiviert und danach wieder aktiviert.

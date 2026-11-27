@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.10.1
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.10.2
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -3485,6 +3485,114 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
     this.style.display = "none";
   }
 
+  _populateFallbackFromHass() {
+    if (!this._hass || !this._hass.states) return;
+    const states = Object.values(this._hass.states);
+
+    if (!this._availableLights.length) {
+      this._availableLights = states
+        .filter(
+          (s) =>
+            s.entity_id.startsWith("light.") &&
+            !s.entity_id.includes(".wohnsinnig_vernetzt") &&
+            !(s.attributes && s.attributes.restored === true)
+        )
+        .map((s) => ({
+          entity_id: s.entity_id,
+          name: String((s.attributes && s.attributes.friendly_name) || s.entity_id).trim(),
+          state: s.state,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name, "de"));
+    }
+
+    if (!this._availableAutomations.length) {
+      this._availableAutomations = states
+        .filter((s) => s.entity_id.startsWith("automation."))
+        .map((s) => ({
+          entity_id: s.entity_id,
+          name: String((s.attributes && s.attributes.friendly_name) || s.entity_id).trim(),
+          state: s.state,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name, "de"));
+    }
+
+    if (!this._availableAlarms.length) {
+      this._availableAlarms = states
+        .filter((s) => {
+          const eid = s.entity_id;
+          if (eid.includes(".wohnsinnig_vernetzt")) return false;
+          const attrs = s.attributes || {};
+          if (attrs.restored === true) return false;
+          const lowId = eid.toLowerCase();
+          const lowName = String(attrs.friendly_name || "").toLowerCase();
+          if (eid.startsWith("sensor.")) {
+            return (
+              lowId.includes("next_alarm") ||
+              lowId.includes("naechster_wecker") ||
+              (String(attrs.device_class || "").toLowerCase() === "timestamp" &&
+                (lowId.includes("alarm") || lowName.includes("wecker") || lowName.includes("alarm")))
+            );
+          }
+          if (eid.startsWith("input_datetime.") && attrs.has_time !== false) {
+            return true;
+          }
+          return false;
+        })
+        .map((s) => {
+          const name = String((s.attributes && s.attributes.friendly_name) || s.entity_id).trim();
+          const valid = s.state && !["unavailable", "unknown", "none"].includes(String(s.state).toLowerCase());
+          const icon = s.entity_id.startsWith("input_datetime.") ? "📅" : "📱";
+          return {
+            entity_id: s.entity_id,
+            name,
+            display_label: `${icon} ${name}`,
+            alarm_preview: valid ? String(s.state) : "Kein Wecker",
+            has_alarm: Boolean(valid),
+          };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name, "de"));
+    }
+
+    const statusSt =
+      this._hass.states["sensor.wohnsinnig_vernetzt_wake_up_light_status"] ||
+      states.find(
+        (s) =>
+          s.entity_id.startsWith("sensor.wohnsinnig_vernetzt") &&
+          s.attributes &&
+          "fortschritt_prozent" in s.attributes &&
+          "zielzeit" in s.attributes
+      );
+    if (statusSt && statusSt.attributes) {
+      const a = statusSt.attributes;
+      if (!this._selectedLights.size && Array.isArray(a.entity_ids)) {
+        this._selectedLights = new Set(a.entity_ids);
+      }
+      if (!this._alarmEntity && a.handy_wecker_entity) {
+        this._alarmEntity = String(a.handy_wecker_entity);
+      }
+      if (a.modus) this._mode = String(a.modus);
+      if (a.uhrzeit) this._time = String(a.uhrzeit);
+      if (Number.isFinite(a.dauer_minuten)) this._duration = a.dauer_minuten;
+      if (Number.isFinite(a.auto_aus_minuten)) this._autoOffMinutes = a.auto_aus_minuten;
+      if (a.wochentage) this._days = String(a.wochentage);
+      if (typeof a.automationen_pausieren === "boolean") this._autoPause = a.automationen_pausieren;
+      if (typeof a.sonnenaufgang_farbe === "boolean") this._sunriseColor = a.sonnenaufgang_farbe;
+    }
+  }
+
+  _formatLoadError(err) {
+    if (err?.body?.error) return String(err.body.error);
+    if (err?.status_code === 404) {
+      return "Backend-Endpunkt noch nicht geladen (HTTP 404) – bitte Home Assistant einmal komplett neu starten.";
+    }
+    if (err?.status_code) {
+      const detail = typeof err.body === "string" ? err.body.slice(0, 120) : "";
+      return `API-Fehler (HTTP ${err.status_code})${detail ? `: ${detail}` : ""}`;
+    }
+    if (err?.message) return String(err.message);
+    return "Konfiguration konnte nicht vom Server geladen werden.";
+  }
+
   async _loadConfig() {
     if (!this._hass) return;
     try {
@@ -3500,30 +3608,16 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
       this._days = data.wakeup_days || "daily";
       this._autoPause = data.wakeup_auto_pause !== false;
       this._sunriseColor = data.wakeup_sunrise_color !== false;
-      let loadedLights = Array.isArray(data.available_lights) ? data.available_lights : [];
-      if (!loadedLights.length && this._hass && this._hass.states) {
-        loadedLights = Object.values(this._hass.states)
-          .filter(
-            (s) =>
-              s.entity_id.startsWith("light.") &&
-              !s.entity_id.includes(".wohnsinnig_vernetzt") &&
-              !(s.attributes && s.attributes.restored === true)
-          )
-          .map((s) => ({
-            entity_id: s.entity_id,
-            name: String((s.attributes && s.attributes.friendly_name) || s.entity_id).trim(),
-            state: s.state,
-          }))
-          .sort((a, b) => a.name.localeCompare(b.name, "de"));
-      }
-      this._availableLights = loadedLights;
+      this._availableLights = Array.isArray(data.available_lights) ? data.available_lights : [];
       this._availableAutomations = Array.isArray(data.available_automations) ? data.available_automations : [];
+      this._populateFallbackFromHass();
       this._loading = false;
       this._error = "";
       this._renderBody();
     } catch (err) {
+      this._populateFallbackFromHass();
       this._loading = false;
-      this._error = err?.body?.error || err?.message || "Konfiguration konnte nicht geladen werden.";
+      this._error = this._formatLoadError(err);
       this._renderBody();
     }
   }
@@ -3554,7 +3648,7 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
       setTimeout(() => this.close(), 900);
     } catch (err) {
       this._saving = false;
-      this._error = err?.body?.error || err?.message || "Speichern fehlgeschlagen.";
+      this._error = this._formatLoadError(err);
       this._updateFooter();
     }
   }

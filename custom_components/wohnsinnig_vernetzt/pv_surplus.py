@@ -371,7 +371,7 @@ def get_pv_sensor_candidates(
     seen_p: set[str] = set()
     seen_b: set[str] = set()
 
-    for st in hass.states.async_all(["sensor", "input_number"]):
+    for st in [*hass.states.async_all("sensor"), *hass.states.async_all("input_number")]:
         eid = st.entity_id
         if f".{DOMAIN}" in eid:
             continue
@@ -453,7 +453,10 @@ def get_pv_sensor_candidates(
 def get_pv_target_candidates(hass: HomeAssistant) -> list[dict[str, Any]]:
     """Liefert alle steuerbaren Ziel-Entitäten für PV-Überschuss-Aktionen."""
     items: list[dict[str, Any]] = []
-    for st in hass.states.async_all(list(ALL_TARGET_DOMAINS)):
+    target_states = []
+    for _dom in ALL_TARGET_DOMAINS:
+        target_states.extend(hass.states.async_all(_dom))
+    for st in target_states:
         eid = st.entity_id
         if f".{DOMAIN}" in eid:
             continue
