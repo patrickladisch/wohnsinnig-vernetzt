@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.10.0
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.10.1
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -2756,51 +2756,6 @@ class WohnsinnigVernetztPresenceConfigDialog extends HTMLElement {
     });
   }
 
-_renderAlarmSelect() {
-    const sel = this.shadowRoot.getElementById("wud-alarm");
-    if (!sel) return;
-    sel.innerHTML = "";
-
-    const manualOpt = document.createElement("option");
-    manualOpt.value = "";
-    manualOpt.textContent = "🕒 Feste Uhrzeit (manuell)";
-    sel.appendChild(manualOpt);
-
-    this._availableAlarms.forEach((cand) => {
-      const opt = document.createElement("option");
-      opt.value = cand.entity_id;
-      opt.textContent = cand.display_label || cand.name || cand.entity_id;
-      sel.appendChild(opt);
-    });
-
-    sel.value = this._alarmEntity || "";
-  }
-
-  _updateManualTimeVisibility() {
-    const hintEl = this.shadowRoot.getElementById("wud-alarm-hint");
-    const timeField = this.shadowRoot.getElementById("wud-time-field");
-    const daysField = this.shadowRoot.getElementById("wud-days-field");
-    const usingPhone = Boolean(this._alarmEntity);
-
-    if (timeField) timeField.style.opacity = usingPhone ? "0.45" : "1";
-    if (daysField) daysField.style.opacity = usingPhone ? "0.45" : "1";
-
-    if (hintEl) {
-      if (!usingPhone) {
-        hintEl.textContent =
-          "Tipp: Wähle hier dein Handy, dann richtet sich das Licht automatisch nach deinem gestellten Wecker.";
-      } else {
-        const found = this._availableAlarms.find((a) => a.entity_id === this._alarmEntity);
-        if (found && found.has_alarm) {
-          hintEl.textContent = `✅ Erkannter Wecker: ${found.alarm_preview} (${this._mode === "start_at" ? "Startzeit" : "100 % Helligkeit"})`;
-        } else {
-          hintEl.textContent =
-            "📱 Verknüpft – aktuell kein Wecker auf diesem Handy gestellt (Licht bleibt an freien Tagen aus).";
-        }
-      }
-    }
-  }
-
   _renderBody() {
     const loadingEl = this.shadowRoot.getElementById("dlg-loading");
     const formEl = this.shadowRoot.getElementById("dlg-form");
@@ -3545,7 +3500,23 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
       this._days = data.wakeup_days || "daily";
       this._autoPause = data.wakeup_auto_pause !== false;
       this._sunriseColor = data.wakeup_sunrise_color !== false;
-      this._availableLights = Array.isArray(data.available_lights) ? data.available_lights : [];
+      let loadedLights = Array.isArray(data.available_lights) ? data.available_lights : [];
+      if (!loadedLights.length && this._hass && this._hass.states) {
+        loadedLights = Object.values(this._hass.states)
+          .filter(
+            (s) =>
+              s.entity_id.startsWith("light.") &&
+              !s.entity_id.includes(".wohnsinnig_vernetzt") &&
+              !(s.attributes && s.attributes.restored === true)
+          )
+          .map((s) => ({
+            entity_id: s.entity_id,
+            name: String((s.attributes && s.attributes.friendly_name) || s.entity_id).trim(),
+            state: s.state,
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name, "de"));
+      }
+      this._availableLights = loadedLights;
       this._availableAutomations = Array.isArray(data.available_automations) ? data.available_automations : [];
       this._loading = false;
       this._error = "";
@@ -3720,6 +3691,51 @@ class WohnsinnigVernetztWakeUpConfigDialog extends HTMLElement {
       label.appendChild(txt);
       wrap.appendChild(label);
     });
+  }
+
+  _renderAlarmSelect() {
+    const sel = this.shadowRoot.getElementById("wud-alarm");
+    if (!sel) return;
+    sel.innerHTML = "";
+
+    const manualOpt = document.createElement("option");
+    manualOpt.value = "";
+    manualOpt.textContent = "🕒 Feste Uhrzeit (manuell)";
+    sel.appendChild(manualOpt);
+
+    this._availableAlarms.forEach((cand) => {
+      const opt = document.createElement("option");
+      opt.value = cand.entity_id;
+      opt.textContent = cand.display_label || cand.name || cand.entity_id;
+      sel.appendChild(opt);
+    });
+
+    sel.value = this._alarmEntity || "";
+  }
+
+  _updateManualTimeVisibility() {
+    const hintEl = this.shadowRoot.getElementById("wud-alarm-hint");
+    const timeField = this.shadowRoot.getElementById("wud-time-field");
+    const daysField = this.shadowRoot.getElementById("wud-days-field");
+    const usingPhone = Boolean(this._alarmEntity);
+
+    if (timeField) timeField.style.opacity = usingPhone ? "0.45" : "1";
+    if (daysField) daysField.style.opacity = usingPhone ? "0.45" : "1";
+
+    if (hintEl) {
+      if (!usingPhone) {
+        hintEl.textContent =
+          "Tipp: Wähle hier dein Handy, dann richtet sich das Licht automatisch nach deinem gestellten Wecker.";
+      } else {
+        const found = this._availableAlarms.find((a) => a.entity_id === this._alarmEntity);
+        if (found && found.has_alarm) {
+          hintEl.textContent = `✅ Erkannter Wecker: ${found.alarm_preview} (${this._mode === "start_at" ? "Startzeit" : "100 % Helligkeit"})`;
+        } else {
+          hintEl.textContent =
+            "📱 Verknüpft – aktuell kein Wecker auf diesem Handy gestellt (Licht bleibt an freien Tagen aus).";
+        }
+      }
+    }
   }
 
   _renderBody() {
