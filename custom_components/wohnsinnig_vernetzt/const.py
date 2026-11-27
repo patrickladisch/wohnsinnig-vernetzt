@@ -1,7 +1,7 @@
 """Konstanten für Wohnsinnig vernetzt."""
 
 DOMAIN = "wohnsinnig_vernetzt"
-VERSION = "2.8.0"
+VERSION = "2.9.0"
 
 DEFAULT_RSS_URL = "https://anchor.fm/s/111a8abd0/podcast/rss"
 DEFAULT_BLUEPRINTS_URL = "https://www.wohnsinnigvernetzt.de/"
@@ -94,6 +94,7 @@ DEVICE_SECTION_PRESENCE = "presence"
 DEVICE_SECTION_BLUEPRINTS = "blueprints"
 DEVICE_SECTION_CHECKS = "checks"
 DEVICE_SECTION_WAKEUP = "wakeup"
+DEVICE_SECTION_PV = "pv"
 
 DEVICE_NAME = "Wohnsinnig vernetzt – Audio & Podcast"
 DEVICE_MODEL = "Podcast: Wohnsinnig vernetzt"
@@ -151,3 +152,43 @@ EVENT_WAKEUP_AUTO_OFF = f"{DOMAIN}_wakeup_auto_off"
 
 SERVICE_START_WAKEUP = "start_wakeup_light"
 SERVICE_STOP_WAKEUP = "stop_wakeup_light"
+
+# PV-Überschuss & Solar-Manager
+PV_TRIGGER_SURPLUS = "surplus"
+PV_TRIGGER_BATTERY = "battery"
+PV_TRIGGER_EITHER = "either"
+PV_TRIGGER_BOTH = "both"
+PV_TRIGGER_MODE_LABELS = {
+    PV_TRIGGER_EITHER: "Überschuss ODER PV-Akku",
+    PV_TRIGGER_SURPLUS: "Nur PV-Überschuss (Watt)",
+    PV_TRIGGER_BATTERY: "Nur PV-Akku (%)",
+    PV_TRIGGER_BOTH: "Überschuss UND PV-Akku",
+}
+
+PV_ACTION_TURN_ON = "turn_on"
+PV_ACTION_PRESS_BUTTON = "press_button"
+PV_ACTION_RUN_SCRIPT = "run_script"
+PV_ACTION_ACTIVATE_SCENE = "activate_scene"
+PV_ACTION_TRIGGER_AUTOMATION = "trigger_automation"
+PV_ACTION_TYPE_LABELS = {
+    PV_ACTION_TURN_ON: "Einschalten (Steckdose / Wallbox / Schalter)",
+    PV_ACTION_PRESS_BUTTON: "Taste drücken (z. B. Geschirrspüler)",
+    PV_ACTION_RUN_SCRIPT: "Skript ausführen",
+    PV_ACTION_ACTIVATE_SCENE: "Szene aktivieren",
+    PV_ACTION_TRIGGER_AUTOMATION: "Automation auslösen",
+}
+
+DEFAULT_PV_SURPLUS_ENTITY = ""
+DEFAULT_PV_BATTERY_ENTITY = ""
+DEFAULT_PV_INVERT_SURPLUS = False
+
+CONF_PV_SURPLUS_ENTITY = "pv_surplus_entity"
+CONF_PV_BATTERY_ENTITY = "pv_battery_entity"
+CONF_PV_INVERT_SURPLUS = "pv_invert_surplus"
+CONF_PV_RULES = "pv_rules"
+
+EVENT_PV_ACTION_TRIGGERED = f"{DOMAIN}_pv_action_triggered"
+EVENT_PV_ACTION_STOPPED = f"{DOMAIN}_pv_action_stopped"
+
+SERVICE_EVALUATE_PV = "evaluate_pv_surplus"
+SERVICE_RESET_PV_DAILY = "reset_pv_daily_triggers"

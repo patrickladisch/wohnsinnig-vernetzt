@@ -25,6 +25,7 @@
         "title": "Wohnsinnig vernetzt konfigurieren",
         "description": "Wähle den Bereich, den du anpassen möchtest.",
         "menu_options": {
+          "pv": "☀️ PV-Überschuss (Sensoren & Aktionen)",
           "wakeup": "🌅 Wake-Up Light (Lampen, Handy-Wecker, Dauer & Automationen)",
           "presence": "🏠 Anwesenheitssimulation (Lampen, Schalter & Bewegungsmelder)",
           "monitoring": "🔋 Batterie-Check & Stille Sensoren",
@@ -79,6 +80,49 @@
           "wakeup_sunrise_color": "Sanfte Sonnenaufgangs-Farbtemperatur (Warmweiß → Tageslicht)",
           "wakeup_alarm_entity": "📱 Handy-Wecker (Next Alarm Sensor – optional)",
           "wakeup_auto_off_minutes": "Auto-Aus nach 100 % Helligkeit (Minuten, 0 = deaktiviert)"
+        }
+      },
+      "pv": {
+        "title": "PV-Überschuss konfigurieren",
+        "description": "Wähle PV-Sensoren aus oder verwalte deine Aktionen (Tipp: noch komfortabler geht es über „Konfiguration öffnen“ direkt am PV-Gerät).",
+        "menu_options": {
+          "pv_sensors": "🔌 PV-Sensoren festlegen (Überschuss & PV-Akku)",
+          "pv_add_rule": "➕ Neue PV-Aktion hinzufügen",
+          "pv_delete_rule": "🗑️ Bestehende PV-Aktion löschen"
+        }
+      },
+      "pv_sensors": {
+        "title": "PV-Sensoren",
+        "description": "Wähle deinen PV-Überschuss- bzw. Netzeinspeise-Sensor und optional den Ladestand (SoC) deines PV-Akkus.",
+        "data": {
+          "pv_surplus_entity": "PV-Überschuss / Einspeise-Sensor (W oder kW)",
+          "pv_invert_surplus": "Negativer Wert = Überschuss (z. B. Netzzähler: -2500 W = Einspeisung)",
+          "pv_battery_entity": "PV-Akku Ladestand-Sensor (%, optional)"
+        }
+      },
+      "pv_add_rule": {
+        "title": "Neue PV-Aktion hinzufügen",
+        "description": "Definiere, bei welchem PV-Überschuss oder Akku-Stand welche Aktion ausgeführt werden soll.",
+        "data": {
+          "name": "Name der Aktion (z. B. Werkzeug-Akkus, Geschirrspüler, Wallbox)",
+          "trigger_mode": "Auslösebedingung",
+          "min_surplus_w": "Mindest-PV-Überschuss (Watt)",
+          "min_battery_soc": "Mindest-PV-Akku-Stand (%)",
+          "delay_on_minutes": "Wolkenfilter / Einschalt-Verzögerung (Minuten)",
+          "action_type": "Aktionstyp",
+          "target_entity": "Ziel-Entität (Steckdose, Wallbox, Button, Skript, …)",
+          "once_per_day": "Nur 1× pro Tag ausführen (ideal für Geschirrspüler / Waschmaschine)",
+          "auto_off": "Automatisch wieder ausschalten (nur bei Einschalten)",
+          "off_surplus_w": "Abschaltschwelle Überschuss (Watt)",
+          "off_battery_soc": "Abschaltschwelle PV-Akku (%)",
+          "delay_off_minutes": "Nachlaufzeit bei Wolken vor Abschaltung (Minuten)"
+        }
+      },
+      "pv_delete_rule": {
+        "title": "PV-Aktion löschen",
+        "description": "Wähle die Aktionen aus, die entfernt werden sollen.",
+        "data": {
+          "delete_ids": "Zu löschende Aktionen"
         }
       }
     }

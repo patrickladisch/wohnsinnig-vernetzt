@@ -43,6 +43,10 @@ from .const import (
     CONF_WAKEUP_MODE,
     CONF_WAKEUP_PAUSE_AUTOMATIONS,
     CONF_WAKEUP_SUNRISE_COLOR,
+    CONF_PV_BATTERY_ENTITY,
+    CONF_PV_INVERT_SURPLUS,
+    CONF_PV_RULES,
+    CONF_PV_SURPLUS_ENTITY,
     CONF_WAKEUP_TIME,
     DEFAULT_ALERTS_URL,
     DEFAULT_BATTERY_PUSH_ENABLED,
@@ -68,6 +72,13 @@ from .const import (
     DEFAULT_WAKEUP_TIME,
     WAKEUP_ALARM_MANUAL,
     WAKEUP_DAYS_LABELS,
+    DEFAULT_PV_BATTERY_ENTITY,
+    DEFAULT_PV_INVERT_SURPLUS,
+    DEFAULT_PV_SURPLUS_ENTITY,
+    PV_ACTION_TURN_ON,
+    PV_ACTION_TYPE_LABELS,
+    PV_TRIGGER_EITHER,
+    PV_TRIGGER_MODE_LABELS,
     WAKEUP_MODE_LABELS,
     DOMAIN,
     NOTIFY_NONE,
@@ -84,6 +95,13 @@ from .wakeup_light import (
     normalize_wakeup_automations,
     normalize_wakeup_lights,
     parse_wakeup_time,
+)
+from .pv_surplus import (
+    ALL_TARGET_DOMAINS,
+    get_pv_sensor_candidates,
+    normalize_pv_rule,
+    normalize_pv_rules,
+    normalize_sensor_entity,
 )
 
 
@@ -401,6 +419,110 @@ def _build_wakeup_schema(hass: HomeAssistant, defaults: dict) -> vol.Schema:
     )
 
 
+def _build_pv_sensors_schema(hass: HomeAssistant, defaults: dict) -> vol.Schema:
+    cur_surplus = normalize_sensor_entity(
+        defaults.get(CONF_PV_SURPLUS_ENTITY, DEFAULT_PV_SURPLUS_ENTITY)
+    )
+    cur_battery = normalize_sensor_entity(
+        defaults.get(CONF_PV_BATTERY_ENTITY, DEFAULT_PV_BATTERY_ENTITY)
+    )
+    power_cands, bat_cands = get_pv_sensor_candidates(hass, cur_surplus, cur_battery)
+
+    surplus_opts = [
+        selector.SelectOptionDict(value="", label="— Kein Überschuss-Sensor —"),
+        *[
+            selector.SelectOptionDict(value=c["entity_id"], label=c["label"])
+            for c in power_cands
+        ],
+    ]
+    bat_opts = [
+        selector.SelectOptionDict(value="", label="— Kein PV-Akku-Sensor —"),
+        *[
+            selector.SelectOptionDict(value=c["entity_id"], label=c["label"])
+            for c in bat_cands
+        ],
+    ]
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_PV_SURPLUS_ENTITY, default=cur_surplus
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=surplus_opts,
+                    custom_value=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(
+                CONF_PV_INVERT_SURPLUS,
+                default=bool(
+                    defaults.get(CONF_PV_INVERT_SURPLUS, DEFAULT_PV_INVERT_SURPLUS)
+                ),
+            ): bool,
+            vol.Optional(
+                CONF_PV_BATTERY_ENTITY, default=cur_battery
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=bat_opts,
+                    custom_value=True,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+        }
+    )
+
+
+def _build_pv_add_rule_schema() -> vol.Schema:
+    trigger_opts = [
+        selector.SelectOptionDict(value=k, label=v)
+        for k, v in PV_TRIGGER_MODE_LABELS.items()
+    ]
+    action_opts = [
+        selector.SelectOptionDict(value=k, label=v)
+        for k, v in PV_ACTION_TYPE_LABELS.items()
+    ]
+    return vol.Schema(
+        {
+            vol.Required("name", default="Neue PV-Aktion"): str,
+            vol.Required("trigger_mode", default=PV_TRIGGER_EITHER): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=trigger_opts,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required("min_surplus_w", default=500): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=50000)
+            ),
+            vol.Required("min_battery_soc", default=80): vol.All(
+                vol.Coerce(int), vol.Range(min=1, max=100)
+            ),
+            vol.Required("delay_on_minutes", default=2): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=60)
+            ),
+            vol.Required("action_type", default=PV_ACTION_TURN_ON): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=action_opts,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required("target_entity"): selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=list(ALL_TARGET_DOMAINS))
+            ),
+            vol.Required("once_per_day", default=False): bool,
+            vol.Required("auto_off", default=False): bool,
+            vol.Required("off_surplus_w", default=0): vol.All(
+                vol.Coerce(int), vol.Range(min=-20000, max=50000)
+            ),
+            vol.Required("off_battery_soc", default=70): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=100)
+            ),
+            vol.Required("delay_off_minutes", default=5): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=60)
+            ),
+        }
+    )
+
+
 class WohnsinnigVernetztConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Einrichtungsassistent für Wohnsinnig vernetzt."""
 
@@ -466,13 +588,87 @@ class WohnsinnigVernetztOptionsFlow(config_entries.OptionsFlow):
             current[CONF_WAKEUP_AUTO_PAUSE] = wm.auto_pause
             current[CONF_WAKEUP_PAUSE_AUTOMATIONS] = list(wm.manual_pause_automations)
             current[CONF_WAKEUP_SUNRISE_COLOR] = wm.sunrise_color
+            pm_pv = coordinator.pv_manager
+            current[CONF_PV_SURPLUS_ENTITY] = pm_pv.surplus_entity
+            current[CONF_PV_BATTERY_ENTITY] = pm_pv.battery_entity
+            current[CONF_PV_INVERT_SURPLUS] = pm_pv.invert_surplus
+            current[CONF_PV_RULES] = list(pm_pv.rules)
         return current
 
     async def async_step_init(self, user_input=None):
         return self.async_show_menu(
             step_id="init",
-            menu_options=["wakeup", "presence", "monitoring", "podcast"],
+            menu_options=["pv", "wakeup", "presence", "monitoring", "podcast"],
         )
+
+    async def async_step_pv(self, user_input=None):
+        current = self._current_merged()
+        rules = normalize_pv_rules(current.get(CONF_PV_RULES))
+        opts = ["pv_sensors", "pv_add_rule"]
+        if rules:
+            opts.append("pv_delete_rule")
+        return self.async_show_menu(step_id="pv", menu_options=opts)
+
+    async def async_step_pv_sensors(self, user_input=None):
+        current = self._current_merged()
+        if user_input is not None:
+            merged = {**current, **user_input}
+            merged[CONF_PV_SURPLUS_ENTITY] = normalize_sensor_entity(
+                merged.get(CONF_PV_SURPLUS_ENTITY)
+            )
+            merged[CONF_PV_BATTERY_ENTITY] = normalize_sensor_entity(
+                merged.get(CONF_PV_BATTERY_ENTITY)
+            )
+            return self.async_create_entry(title="", data=merged)
+
+        return self.async_show_form(
+            step_id="pv_sensors",
+            data_schema=_build_pv_sensors_schema(self.hass, current),
+        )
+
+    async def async_step_pv_add_rule(self, user_input=None):
+        current = self._current_merged()
+        if user_input is not None:
+            rules = normalize_pv_rules(current.get(CONF_PV_RULES))
+            new_rule = normalize_pv_rule(user_input, index=len(rules) + 1)
+            if new_rule is not None:
+                rules.append(new_rule)
+            merged = {**current, CONF_PV_RULES: rules}
+            return self.async_create_entry(title="", data=merged)
+
+        return self.async_show_form(
+            step_id="pv_add_rule",
+            data_schema=_build_pv_add_rule_schema(),
+        )
+
+    async def async_step_pv_delete_rule(self, user_input=None):
+        current = self._current_merged()
+        rules = normalize_pv_rules(current.get(CONF_PV_RULES))
+        if user_input is not None:
+            to_delete = set(user_input.get("delete_ids") or [])
+            remaining = [r for r in rules if r["id"] not in to_delete]
+            merged = {**current, CONF_PV_RULES: remaining}
+            return self.async_create_entry(title="", data=merged)
+
+        del_opts = [
+            selector.SelectOptionDict(
+                value=r["id"],
+                label=f"{r['name']} ({r['target_entity']})",
+            )
+            for r in rules
+        ]
+        schema = vol.Schema(
+            {
+                vol.Optional("delete_ids", default=[]): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=del_opts,
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            }
+        )
+        return self.async_show_form(step_id="pv_delete_rule", data_schema=schema)
 
     async def async_step_wakeup(self, user_input=None):
         current = self._current_merged()

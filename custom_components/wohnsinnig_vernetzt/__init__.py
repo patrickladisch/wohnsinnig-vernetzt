@@ -49,6 +49,10 @@ from .const import (
     CONF_WAKEUP_MODE,
     CONF_WAKEUP_PAUSE_AUTOMATIONS,
     CONF_WAKEUP_SUNRISE_COLOR,
+    CONF_PV_BATTERY_ENTITY,
+    CONF_PV_INVERT_SURPLUS,
+    CONF_PV_RULES,
+    CONF_PV_SURPLUS_ENTITY,
     CONF_WAKEUP_TIME,
     DEFAULT_ALERTS_URL,
     DEFAULT_BATTERY_PUSH_ENABLED,
@@ -71,6 +75,9 @@ from .const import (
     DEFAULT_WAKEUP_DURATION,
     DEFAULT_WAKEUP_MODE,
     DEFAULT_WAKEUP_SUNRISE_COLOR,
+    DEFAULT_PV_BATTERY_ENTITY,
+    DEFAULT_PV_INVERT_SURPLUS,
+    DEFAULT_PV_SURPLUS_ENTITY,
     DEFAULT_WAKEUP_TIME,
     DEVICE_CONFIG_URL,
     DEVICE_MANUFACTURER,
@@ -85,6 +92,8 @@ from .const import (
     SERVICE_RUN_BATTERY_CHECK,
     SERVICE_RUN_SILENT_SENSORS_CHECK,
     SERVICE_START_WAKEUP,
+    SERVICE_EVALUATE_PV,
+    SERVICE_RESET_PV_DAILY,
     SERVICE_STOP_WAKEUP,
     VERSION,
 )
@@ -103,6 +112,12 @@ from .wakeup_light import (
     normalize_wakeup_automations,
     normalize_wakeup_lights,
     parse_wakeup_time,
+)
+from .pv_surplus import (
+    get_pv_sensor_candidates,
+    get_pv_target_candidates,
+    normalize_pv_rules,
+    normalize_sensor_entity,
 )
 
 PLATFORMS: list[Platform] = [
@@ -195,6 +210,7 @@ class WohnsinnigVernetztEpisodesView(HomeAssistantView):
                 "silent_sensors": coordinator.silent_sensors_result,
                 "presence": coordinator.presence_manager.get_status_snapshot(),
                 "wakeup": coordinator.wakeup_manager.get_status_snapshot(),
+                "pv": coordinator.pv_manager.get_status_snapshot(),
                 "spotify_show_id": coordinator.spotify_show_id,
                 "spotify_show_url": coordinator.spotify_show_url,
                 "target_entity": coordinator.target_entity,
@@ -586,6 +602,99 @@ class WohnsinnigVernetztWakeUpConfigView(HomeAssistantView):
         return self.json({"status": "ok"})
 
 
+class WohnsinnigVernetztPvConfigView(HomeAssistantView):
+    """Liefert und speichert PV-Sensoren & beliebig viele PV-Überschuss-Aktionen."""
+
+    url = f"/api/{DOMAIN}/pv_config"
+    name = f"api:{DOMAIN}:pv_config"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        domain_data = hass.data.get(DOMAIN, {})
+        coordinator: WohnsinnigVernetztCoordinator | None = domain_data.get(
+            "coordinator"
+        )
+        if coordinator is None:
+            return self.json({"error": "Integration nicht geladen."}, status_code=503)
+
+        pm = coordinator.pv_manager
+        power_sensors, battery_sensors = get_pv_sensor_candidates(
+            hass, pm.surplus_entity, pm.battery_entity
+        )
+        targets = get_pv_target_candidates(hass)
+
+        return self.json(
+            {
+                "enabled": pm.enabled,
+                "pv_surplus_entity": pm.surplus_entity,
+                "pv_battery_entity": pm.battery_entity,
+                "pv_invert_surplus": pm.invert_surplus,
+                "pv_rules": list(pm.rules),
+                "current_surplus_w": pm.get_current_surplus_w(),
+                "current_battery_soc": pm.get_current_battery_soc(),
+                "available_power_sensors": power_sensors,
+                "available_battery_sensors": battery_sensors,
+                "available_targets": targets,
+            }
+        )
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if not entries:
+            return self.json({"error": "Kein Config Entry gefunden."}, status_code=404)
+        entry = entries[0]
+
+        try:
+            payload = await request.json()
+        except ValueError:
+            return self.json({"error": "Ungültiges JSON."}, status_code=400)
+
+        surplus_entity = normalize_sensor_entity(payload.get("pv_surplus_entity"))
+        battery_entity = normalize_sensor_entity(payload.get("pv_battery_entity"))
+        invert_surplus = bool(payload.get("pv_invert_surplus", False))
+        rules = normalize_pv_rules(payload.get("pv_rules") or [])
+
+        merged = {**entry.data, **entry.options}
+        merged[CONF_PV_SURPLUS_ENTITY] = surplus_entity
+        merged[CONF_PV_BATTERY_ENTITY] = battery_entity
+        merged[CONF_PV_INVERT_SURPLUS] = invert_surplus
+        merged[CONF_PV_RULES] = rules
+
+        hass.config_entries.async_update_entry(entry, options=merged)
+        return self.json({"status": "ok", "rules_count": len(rules)})
+
+
+class WohnsinnigVernetztPvTriggerView(HomeAssistantView):
+    """Löst eine einzelne PV-Aktion manuell aus der Dashboard-Karte zum Testen aus."""
+
+    url = f"/api/{DOMAIN}/pv_trigger"
+    name = f"api:{DOMAIN}:pv_trigger"
+    requires_auth = True
+
+    async def post(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        domain_data = hass.data.get(DOMAIN, {})
+        coordinator: WohnsinnigVernetztCoordinator | None = domain_data.get(
+            "coordinator"
+        )
+        if coordinator is None:
+            return self.json({"error": "Integration nicht geladen."}, status_code=503)
+
+        try:
+            payload = await request.json()
+        except ValueError:
+            return self.json({"error": "Ungültiges JSON."}, status_code=400)
+
+        rule_id = str(payload.get("rule_id") or "").strip()
+        try:
+            await coordinator.pv_manager.async_trigger_rule_now(rule_id)
+        except HomeAssistantError as err:
+            return self.json({"error": str(err)}, status_code=400)
+        return self.json({"status": "ok"})
+
+
 LEGACY_ENTITY_UNIQUE_ID_SUFFIXES = (
     "_send_feedback",
     "_feedback_message",
@@ -646,6 +755,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(WohnsinnigVernetztBatteryExclusionsView())
         hass.http.register_view(WohnsinnigVernetztPresenceConfigView())
         hass.http.register_view(WohnsinnigVernetztWakeUpConfigView())
+        hass.http.register_view(WohnsinnigVernetztPvConfigView())
+        hass.http.register_view(WohnsinnigVernetztPvTriggerView())
         domain_data["frontend_registered"] = True
 
     config = {**entry.data, **entry.options}
@@ -713,6 +824,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         wakeup_sunrise_color=bool(
             config.get(CONF_WAKEUP_SUNRISE_COLOR, DEFAULT_WAKEUP_SUNRISE_COLOR)
         ),
+        pv_surplus_entity=str(
+            config.get(CONF_PV_SURPLUS_ENTITY, DEFAULT_PV_SURPLUS_ENTITY)
+        ),
+        pv_battery_entity=str(
+            config.get(CONF_PV_BATTERY_ENTITY, DEFAULT_PV_BATTERY_ENTITY)
+        ),
+        pv_invert_surplus=bool(
+            config.get(CONF_PV_INVERT_SURPLUS, DEFAULT_PV_INVERT_SURPLUS)
+        ),
+        pv_rules=config.get(CONF_PV_RULES),
         default_target=config.get(CONF_DEFAULT_TARGET, BROWSER_TARGET),
     )
 
@@ -740,10 +861,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if hass.is_running:
         await coordinator.async_init_presence_simulation()
         await coordinator.async_init_wakeup_light()
+        await coordinator.async_init_pv_surplus()
     else:
         async def _run_after_ha_started(_event: Event) -> None:
             await coordinator.async_init_presence_simulation()
             await coordinator.async_init_wakeup_light()
+            await coordinator.async_init_pv_surplus()
             await coordinator.async_run_battery_check(notify=False)
             await coordinator.async_run_silent_sensors_check(notify=False)
 
@@ -920,6 +1043,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _handle_stop_wakeup,
         )
 
+    if not hass.services.has_service(DOMAIN, SERVICE_EVALUATE_PV):
+        async def _handle_evaluate_pv(call: ServiceCall) -> None:
+            coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
+                DOMAIN, {}
+            ).get("coordinator")
+            if coord is None:
+                raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
+            await coord.pv_manager.async_evaluate()
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_EVALUATE_PV,
+            _handle_evaluate_pv,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_RESET_PV_DAILY):
+        async def _handle_reset_pv_daily(call: ServiceCall) -> None:
+            coord: WohnsinnigVernetztCoordinator | None = hass.data.get(
+                DOMAIN, {}
+            ).get("coordinator")
+            if coord is None:
+                raise HomeAssistantError("Wohnsinnig vernetzt ist nicht aktiv.")
+            await coord.pv_manager.async_reset_daily_triggers()
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RESET_PV_DAILY,
+            _handle_reset_pv_daily,
+        )
+
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -937,6 +1090,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if coordinator is not None:
         await coordinator.async_shutdown_presence()
         await coordinator.async_shutdown_wakeup_light()
+        await coordinator.async_shutdown_pv_surplus()
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
@@ -952,6 +1106,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_INCLUDE_BATTERY_DEVICE,
             SERVICE_START_WAKEUP,
             SERVICE_STOP_WAKEUP,
+            SERVICE_EVALUATE_PV,
+            SERVICE_RESET_PV_DAILY,
         ):
             if hass.services.has_service(DOMAIN, svc):
                 hass.services.async_remove(DOMAIN, svc)

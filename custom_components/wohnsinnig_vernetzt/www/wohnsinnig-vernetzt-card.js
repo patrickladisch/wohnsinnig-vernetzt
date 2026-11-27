@@ -1,4 +1,4 @@
-// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.8.0
+// Wohnsinnig vernetzt Dashboard Player & Blueprints Cards v2.9.0
 
 class WohnsinnigVernetztCard extends HTMLElement {
   constructor() {
@@ -3951,9 +3951,1099 @@ window.__wvOpenWakeUpConfigDialog = function (hass) {
   dlg.open(activeHass);
 };
 
-// Doppelte Event- & State-Bridge für Anwesenheitssimulation UND Wake-Up Light
-if (!window.__wvConfigBridgeV3Initialized) {
-  window.__wvConfigBridgeV3Initialized = true;
+class WohnsinnigVernetztPvCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._config = { title: "PV-Überschuss" };
+    this._busy = false;
+    this._errorMsg = "";
+    this._lastKey = null;
+  }
+
+  static getStubConfig() {
+    return { title: "PV-Überschuss" };
+  }
+
+  connectedCallback() {
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    this._render();
+  }
+
+  setConfig(config) {
+    this._config = {
+      title: "PV-Überschuss",
+      ...(config || {}),
+    };
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    this._render();
+  }
+
+  _findEntities(hass) {
+    if (!hass || !hass.states) return { sw: null, sensor: null };
+    const sw =
+      hass.states["switch.wohnsinnig_vernetzt_pv_ueberschuss_pv_ueberschuss"] ||
+      Object.values(hass.states).find(
+        (s) =>
+          s.entity_id.startsWith("switch.wohnsinnig_vernetzt") &&
+          s.attributes &&
+          "ueberschuss_w" in s.attributes &&
+          "aktionen_anzahl" in s.attributes
+      );
+    const sensor =
+      hass.states["sensor.wohnsinnig_vernetzt_pv_ueberschuss_status"] ||
+      Object.values(hass.states).find(
+        (s) =>
+          s.entity_id.startsWith("sensor.wohnsinnig_vernetzt") &&
+          s.attributes &&
+          "rules_status" in s.attributes &&
+          "ueberschuss_w" in s.attributes
+      );
+    return { sw, sensor };
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    const { sw, sensor } = this._findEntities(hass);
+    const attrs = sensor?.attributes || {};
+    const key = [
+      sw ? sw.state : "",
+      sensor ? sensor.state : "",
+      attrs.ueberschuss_w ?? "",
+      attrs.akku_prozent ?? "",
+      attrs.aktionen_anzahl ?? "",
+      attrs.aktive_aktionen ?? "",
+      attrs.letztes_ereignis ?? "",
+    ].join("|");
+    if (key !== this._lastKey) {
+      this._lastKey = key;
+      this._render();
+    }
+  }
+
+  getCardSize() {
+    return 4;
+  }
+
+  async _toggleMaster(ev) {
+    if (ev) ev.stopPropagation();
+    if (!this._hass || this._busy) return;
+    const { sw } = this._findEntities(this._hass);
+    if (!sw) return;
+
+    this._busy = true;
+    this._errorMsg = "";
+    this._render();
+    try {
+      await this._hass.callService("switch", sw.state === "on" ? "turn_off" : "turn_on", {
+        entity_id: sw.entity_id,
+      });
+    } catch (err) {
+      this._errorMsg = err?.message || "Bitte zuerst über ⚙️ Sensoren & Aktionen einrichten.";
+    } finally {
+      this._busy = false;
+      this._render();
+    }
+  }
+
+  async _triggerRule(ruleId, ev) {
+    if (ev) ev.stopPropagation();
+    if (!this._hass || this._busy || !ruleId) return;
+    this._busy = true;
+    this._errorMsg = "";
+    this._render();
+    try {
+      await this._hass.callApi("POST", "wohnsinnig_vernetzt/pv_trigger", { rule_id: ruleId });
+    } catch (err) {
+      this._errorMsg = err?.body?.error || err?.message || "Aktion konnte nicht ausgelöst werden.";
+    } finally {
+      this._busy = false;
+      this._render();
+    }
+  }
+
+  _render() {
+    if (!this.shadowRoot || this.shadowRoot.innerHTML === "") return;
+    const { sw, sensor } = this._findEntities(this._hass);
+
+    const titleEl = this.shadowRoot.getElementById("pv-title");
+    const subEl = this.shadowRoot.getElementById("pv-sub");
+    const toggleBtn = this.shadowRoot.getElementById("pv-toggle");
+    const pillsEl = this.shadowRoot.getElementById("pv-pills");
+    const listEl = this.shadowRoot.getElementById("pv-list");
+    const errEl = this.shadowRoot.getElementById("pv-error");
+
+    const isOn = sw?.state === "on";
+    const attrs = sensor?.attributes || {};
+    const surplusW = attrs.ueberschuss_w;
+    const batSoc = attrs.akku_prozent;
+    const rules = Array.isArray(attrs.rules_status) ? attrs.rules_status : [];
+
+    if (titleEl) titleEl.textContent = this._config.title || "PV-Überschuss";
+    if (subEl) {
+      if (!rules.length) {
+        subEl.textContent = "Noch keine Aktionen – tippe auf ⚙️ zum Hinzufügen";
+      } else {
+        subEl.textContent = attrs.letztes_ereignis || `${rules.length} ${rules.length === 1 ? "Aktion" : "Aktionen"} konfiguriert`;
+      }
+    }
+
+    if (toggleBtn) {
+      toggleBtn.disabled = this._busy || !sw;
+      toggleBtn.className = `pv-master ${isOn ? "on" : "off"}`;
+      toggleBtn.textContent = this._busy ? "…" : isOn ? "AKTIV" : "AUS";
+    }
+
+    if (pillsEl) {
+      const sTxt = Number.isFinite(surplusW) ? `${Math.round(surplusW)} W` : "—";
+      const bTxt = Number.isFinite(batSoc) ? `${Math.round(batSoc)} %` : "—";
+      pillsEl.innerHTML = `
+        <span class="pv-pill ${Number.isFinite(surplusW) && surplusW > 0 ? "sun" : ""}">☀️ Überschuss: ${sTxt}</span>
+        <span class="pv-pill ${Number.isFinite(batSoc) && batSoc >= 80 ? "ok" : ""}">🔋 PV-Akku: ${bTxt}</span>
+      `;
+    }
+
+    if (listEl) {
+      listEl.innerHTML = "";
+      if (!rules.length) {
+        const empty = document.createElement("div");
+        empty.className = "pv-empty";
+        empty.textContent = "Klicke oben rechts auf ⚙️, um Steckdosen, Geschirrspüler oder Wallbox hinzuzufügen.";
+        listEl.appendChild(empty);
+      } else {
+        rules.forEach((r) => {
+          const row = document.createElement("div");
+          row.className = `pv-row ${r.state_key || "idle"}`;
+
+          const left = document.createElement("div");
+          left.className = "pv-row-left";
+          const name = document.createElement("div");
+          name.className = "pv-row-name";
+          name.textContent = r.name;
+          const meta = document.createElement("div");
+          meta.className = "pv-row-meta";
+          meta.textContent = `${r.trigger_summary} • ${r.target_name}`;
+          left.appendChild(name);
+          left.appendChild(meta);
+
+          const right = document.createElement("div");
+          right.className = "pv-row-right";
+
+          const badge = document.createElement("span");
+          badge.className = `pv-badge ${r.state_key || "idle"}`;
+          badge.textContent = r.state_label || "Bereit";
+
+          const playBtn = document.createElement("button");
+          playBtn.type = "button";
+          playBtn.className = "pv-play";
+          playBtn.title = "Aktion jetzt manuell auslösen";
+          playBtn.disabled = this._busy;
+          playBtn.textContent = "▶";
+          playBtn.addEventListener("click", (ev) => this._triggerRule(r.id, ev));
+
+          right.appendChild(badge);
+          right.appendChild(playBtn);
+          row.appendChild(left);
+          row.appendChild(right);
+          listEl.appendChild(row);
+        });
+      }
+    }
+
+    if (errEl) {
+      errEl.textContent = this._errorMsg;
+      errEl.style.display = this._errorMsg ? "block" : "none";
+    }
+  }
+
+  _renderShell() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        ha-card { padding: 12px 14px; color: var(--primary-text-color); }
+        .pv-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        .pv-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+        .pv-icon { width: 38px; height: 38px; border-radius: 10px; background: var(--secondary-background-color); display: flex; align-items: center; justify-content: center; font-size: 19px; flex-shrink: 0; }
+        .pv-titles { min-width: 0; flex: 1; }
+        .pv-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pv-sub { font-size: 11px; color: var(--secondary-text-color); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pv-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+        .pv-cfg { background: var(--secondary-background-color); border: 1px solid var(--divider-color); color: var(--primary-text-color); cursor: pointer; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+        .pv-cfg:hover { border-color: var(--primary-color); }
+        .pv-master { border: none; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 999px; }
+        .pv-master.on { background: var(--success-color, #4caf50); color: #fff; }
+        .pv-master.off { background: var(--secondary-background-color); color: var(--secondary-text-color); border: 1px solid var(--divider-color); }
+        .pv-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+        .pv-pill { font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 999px; background: var(--secondary-background-color); color: var(--secondary-text-color); }
+        .pv-pill.sun { color: var(--warning-color, #ff9800); background: rgba(255, 152, 0, 0.16); }
+        .pv-pill.ok { color: var(--success-color, #4caf50); background: rgba(76, 175, 80, 0.15); }
+        .pv-list { margin-top: 10px; border-top: 1px solid var(--divider-color); padding-top: 6px; max-height: 280px; overflow-y: auto; }
+        .pv-empty { font-size: 12px; color: var(--secondary-text-color); text-align: center; padding: 10px 4px; }
+        .pv-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 4px; border-bottom: 1px solid var(--divider-color); }
+        .pv-row:last-child { border-bottom: none; }
+        .pv-row-left { min-width: 0; flex: 1; }
+        .pv-row-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pv-row-meta { font-size: 11px; color: var(--secondary-text-color); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pv-row-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+        .pv-badge { font-size: 10px; font-weight: 700; padding: 3px 7px; border-radius: 999px; background: var(--secondary-background-color); color: var(--secondary-text-color); }
+        .pv-badge.active { color: var(--success-color, #4caf50); background: rgba(76, 175, 80, 0.16); }
+        .pv-badge.waiting, .pv-badge.stopping { color: var(--warning-color, #ff9800); background: rgba(255, 152, 0, 0.16); }
+        .pv-badge.done { color: var(--primary-color, #03a9f4); background: rgba(3, 169, 244, 0.16); }
+        .pv-play { background: var(--secondary-background-color); border: 1px solid var(--divider-color); color: var(--primary-text-color); border-radius: 6px; width: 26px; height: 26px; cursor: pointer; font-size: 11px; display: flex; align-items: center; justify-content: center; }
+        .pv-play:hover:not(:disabled) { border-color: var(--primary-color); color: var(--primary-color); }
+        .pv-error { display: none; margin-top: 8px; padding: 7px 10px; border-radius: 8px; font-size: 12px; color: var(--error-color, #db4437); background: rgba(219, 68, 55, 0.12); }
+      </style>
+      <ha-card>
+        <div class="pv-head">
+          <div class="pv-left">
+            <div class="pv-icon">☀️</div>
+            <div class="pv-titles">
+              <div id="pv-title" class="pv-title">PV-Überschuss</div>
+              <div id="pv-sub" class="pv-sub"></div>
+            </div>
+          </div>
+          <div class="pv-actions">
+            <button id="pv-cfg" class="pv-cfg" type="button" title="PV-Überschuss & Aktionen konfigurieren">⚙️</button>
+            <button id="pv-toggle" class="pv-master off" type="button">AUS</button>
+          </div>
+        </div>
+        <div id="pv-pills" class="pv-pills"></div>
+        <div id="pv-list" class="pv-list"></div>
+        <div id="pv-error" class="pv-error"></div>
+      </ha-card>
+    `;
+
+    this.shadowRoot.getElementById("pv-toggle").addEventListener("click", (ev) => this._toggleMaster(ev));
+    this.shadowRoot.getElementById("pv-cfg").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      if (window.__wvOpenPvConfigDialog) {
+        window.__wvOpenPvConfigDialog(this._hass);
+      }
+    });
+  }
+}
+
+if (!customElements.get("wohnsinnig-vernetzt-pv-card")) {
+  customElements.define("wohnsinnig-vernetzt-pv-card", WohnsinnigVernetztPvCard);
+}
+if (!window.customCards.some((c) => c.type === "wohnsinnig-vernetzt-pv-card")) {
+  window.customCards.push({
+    type: "wohnsinnig-vernetzt-pv-card",
+    name: "Wohnsinnig vernetzt PV-Überschuss",
+    description: "Steuert bei PV-Überschuss oder PV-Akku-Stand beliebig viele Aktionen (Steckdosen, Geschirrspüler, Wallbox).",
+  });
+}
+
+class WohnsinnigVernetztPvConfigDialog extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this._hass = null;
+    this._loading = true;
+    this._saving = false;
+    this._error = "";
+    this._savedMsg = "";
+    this._surplusEntity = "";
+    this._batteryEntity = "";
+    this._invertSurplus = false;
+    this._rules = [];
+    this._powerSensors = [];
+    this._batterySensors = [];
+    this._targets = [];
+    this._editingIndex = null; // null = list view, -1 = new rule, >= 0 = edit rule
+    this._draft = null;
+    this._targetSearch = "";
+  }
+
+  open(hass) {
+    this._hass = hass;
+    this._loading = true;
+    this._saving = false;
+    this._error = "";
+    this._savedMsg = "";
+    this._editingIndex = null;
+    this._draft = null;
+    this._targetSearch = "";
+    if (this.shadowRoot.innerHTML === "") {
+      this._renderShell();
+    }
+    const nativeDlg = this.shadowRoot.getElementById("pvd-native");
+    this.style.display = "block";
+    if (nativeDlg) {
+      if (typeof nativeDlg.showModal === "function") {
+        if (!nativeDlg.open) {
+          try {
+            nativeDlg.showModal();
+          } catch (_) {
+            nativeDlg.setAttribute("open", "");
+          }
+        }
+      } else {
+        nativeDlg.setAttribute("open", "");
+      }
+    }
+    this._renderBody();
+    this._loadConfig();
+  }
+
+  close() {
+    const nativeDlg = this.shadowRoot && this.shadowRoot.getElementById("pvd-native");
+    if (nativeDlg) {
+      if (typeof nativeDlg.close === "function" && nativeDlg.open) {
+        try {
+          nativeDlg.close();
+        } catch (_) {
+          nativeDlg.removeAttribute("open");
+        }
+      } else {
+        nativeDlg.removeAttribute("open");
+      }
+    }
+    this.style.display = "none";
+  }
+
+  async _loadConfig() {
+    if (!this._hass) return;
+    try {
+      const data = await this._hass.callApi("GET", "wohnsinnig_vernetzt/pv_config");
+      this._surplusEntity = data.pv_surplus_entity || "";
+      this._batteryEntity = data.pv_battery_entity || "";
+      this._invertSurplus = Boolean(data.pv_invert_surplus);
+      this._rules = Array.isArray(data.pv_rules) ? data.pv_rules.map((r) => ({ ...r })) : [];
+      this._powerSensors = Array.isArray(data.available_power_sensors) ? data.available_power_sensors : [];
+      this._batterySensors = Array.isArray(data.available_battery_sensors) ? data.available_battery_sensors : [];
+      this._targets = Array.isArray(data.available_targets) ? data.available_targets : [];
+      this._loading = false;
+      this._error = "";
+      this._renderBody();
+    } catch (err) {
+      this._loading = false;
+      this._error = err?.body?.error || err?.message || "PV-Konfiguration konnte nicht geladen werden.";
+      this._renderBody();
+    }
+  }
+
+  async _saveConfig() {
+    if (!this._hass || this._saving) return;
+    // Falls gerade eine neue/bearbeitete Regel offen ist, erst übernehmen
+    if (this._editingIndex !== null && this._draft) {
+      if (!this._commitDraft()) return;
+    }
+
+    this._saving = true;
+    this._error = "";
+    this._savedMsg = "";
+    this._updateFooter();
+
+    try {
+      await this._hass.callApi("POST", "wohnsinnig_vernetzt/pv_config", {
+        pv_surplus_entity: this._surplusEntity,
+        pv_battery_entity: this._batteryEntity,
+        pv_invert_surplus: this._invertSurplus,
+        pv_rules: this._rules,
+      });
+      this._saving = false;
+      this._savedMsg = "Gespeichert! PV-Überschuss-Manager übernimmt alle Aktionen…";
+      this._updateFooter();
+      setTimeout(() => this.close(), 900);
+    } catch (err) {
+      this._saving = false;
+      this._error = err?.body?.error || err?.message || "Speichern fehlgeschlagen.";
+      this._updateFooter();
+    }
+  }
+
+  _startNewRule(preset) {
+    const baseRule = {
+      id: `pv_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+      name: "Neue PV-Aktion",
+      enabled: true,
+      trigger_mode: "either",
+      min_surplus_w: 500,
+      min_battery_soc: 80,
+      delay_on_minutes: 2,
+      action_type: "turn_on",
+      target_entity: "",
+      auto_off: false,
+      off_surplus_w: 0,
+      off_battery_soc: 70,
+      delay_off_minutes: 5,
+      once_per_day: false,
+    };
+    if (preset === "socket") {
+      Object.assign(baseRule, {
+        name: "Werkzeug-Akkus laden",
+        trigger_mode: "either",
+        min_surplus_w: 400,
+        min_battery_soc: 80,
+        action_type: "turn_on",
+        auto_off: true,
+        off_surplus_w: 0,
+        off_battery_soc: 65,
+        delay_off_minutes: 5,
+      });
+    } else if (preset === "dishwasher") {
+      Object.assign(baseRule, {
+        name: "Geschirrspüler starten",
+        trigger_mode: "either",
+        min_surplus_w: 1500,
+        min_battery_soc: 85,
+        delay_on_minutes: 3,
+        action_type: "press_button",
+        auto_off: false,
+        once_per_day: true,
+      });
+    } else if (preset === "wallbox") {
+      Object.assign(baseRule, {
+        name: "Wallbox laden",
+        trigger_mode: "surplus",
+        min_surplus_w: 4200,
+        min_battery_soc: 90,
+        delay_on_minutes: 3,
+        action_type: "turn_on",
+        auto_off: true,
+        off_surplus_w: 1000,
+        off_battery_soc: 75,
+        delay_off_minutes: 5,
+      });
+    }
+    this._editingIndex = -1;
+    this._draft = baseRule;
+    this._targetSearch = "";
+    this._error = "";
+    this._renderBody();
+  }
+
+  _startEditRule(idx) {
+    if (idx < 0 || idx >= this._rules.length) return;
+    this._editingIndex = idx;
+    this._draft = { ...this._rules[idx] };
+    this._targetSearch = "";
+    this._error = "";
+    this._renderBody();
+  }
+
+  _commitDraft() {
+    if (!this._draft) return true;
+    const d = this._draft;
+    if (!d.name || !d.name.trim()) {
+      this._error = "Bitte einen Namen für die Aktion eingeben.";
+      this._updateFooter();
+      return false;
+    }
+    if (!d.target_entity) {
+      this._error = "Bitte eine Ziel-Entität (z. B. Steckdose, Button oder Skript) auswählen.";
+      this._updateFooter();
+      return false;
+    }
+    const clean = {
+      ...d,
+      name: d.name.trim(),
+      auto_off: d.action_type === "turn_on" ? Boolean(d.auto_off) : false,
+    };
+    if (this._editingIndex === -1) {
+      this._rules.push(clean);
+    } else if (this._editingIndex >= 0 && this._editingIndex < this._rules.length) {
+      this._rules[this._editingIndex] = clean;
+    }
+    this._editingIndex = null;
+    this._draft = null;
+    this._error = "";
+    this._renderBody();
+    return true;
+  }
+
+  _moveRule(idx, delta) {
+    const targetIdx = idx + delta;
+    if (targetIdx < 0 || targetIdx >= this._rules.length) return;
+    const tmp = this._rules[idx];
+    this._rules[idx] = this._rules[targetIdx];
+    this._rules[targetIdx] = tmp;
+    this._renderRulesList();
+  }
+
+  _deleteRule(idx) {
+    this._rules.splice(idx, 1);
+    this._renderRulesList();
+  }
+
+  _allowedDomainsForAction(actionType) {
+    if (actionType === "press_button") return ["button"];
+    if (actionType === "run_script") return ["script"];
+    if (actionType === "activate_scene") return ["scene"];
+    if (actionType === "trigger_automation") return ["automation"];
+    return ["switch", "input_boolean", "light", "fan", "climate", "humidifier"];
+  }
+
+  _describeTrigger(r) {
+    if (r.trigger_mode === "surplus") return `☀️ ≥ ${r.min_surplus_w} W`;
+    if (r.trigger_mode === "battery") return `🔋 ≥ ${r.min_battery_soc} %`;
+    if (r.trigger_mode === "both") return `☀️ ≥ ${r.min_surplus_w} W & 🔋 ≥ ${r.min_battery_soc} %`;
+    return `☀️ ≥ ${r.min_surplus_w} W oder 🔋 ≥ ${r.min_battery_soc} %`;
+  }
+
+  _renderSensorSelects() {
+    const sSel = this.shadowRoot.getElementById("pvd-surplus");
+    const bSel = this.shadowRoot.getElementById("pvd-battery");
+    const invCb = this.shadowRoot.getElementById("pvd-invert");
+
+    if (sSel) {
+      sSel.innerHTML = "";
+      const noneOpt = document.createElement("option");
+      noneOpt.value = "";
+      noneOpt.textContent = "— Kein Überschuss-Sensor —";
+      sSel.appendChild(noneOpt);
+      this._powerSensors.forEach((s) => {
+        const opt = document.createElement("option");
+        opt.value = s.entity_id;
+        opt.textContent = s.label || s.name;
+        sSel.appendChild(opt);
+      });
+      sSel.value = this._surplusEntity || "";
+    }
+
+    if (bSel) {
+      bSel.innerHTML = "";
+      const noneOpt = document.createElement("option");
+      noneOpt.value = "";
+      noneOpt.textContent = "— Kein PV-Akku-Sensor —";
+      bSel.appendChild(noneOpt);
+      this._batterySensors.forEach((s) => {
+        const opt = document.createElement("option");
+        opt.value = s.entity_id;
+        opt.textContent = s.label || s.name;
+        bSel.appendChild(opt);
+      });
+      bSel.value = this._batteryEntity || "";
+    }
+
+    if (invCb) invCb.checked = this._invertSurplus;
+  }
+
+  _renderRulesList() {
+    const wrap = this.shadowRoot.getElementById("pvd-rules-list");
+    const cnt = this.shadowRoot.getElementById("pvd-rules-count");
+    if (cnt) cnt.textContent = `${this._rules.length} konfiguriert`;
+    if (!wrap) return;
+    wrap.innerHTML = "";
+
+    if (!this._rules.length) {
+      const empty = document.createElement("div");
+      empty.className = "dlg-empty";
+      empty.textContent = "Noch keine PV-Aktionen angelegt. Nutze eine Vorlage oder „➕ Neue Aktion“.";
+      wrap.appendChild(empty);
+      return;
+    }
+
+    this._rules.forEach((r, idx) => {
+      const card = document.createElement("div");
+      card.className = `rule-item ${r.enabled === false ? "disabled" : ""}`;
+
+      const info = document.createElement("div");
+      info.className = "rule-info";
+      const title = document.createElement("div");
+      title.className = "rule-name";
+      title.textContent = `${idx + 1}. ${r.name}`;
+      const meta = document.createElement("div");
+      meta.className = "rule-meta";
+      const extras = [];
+      if (r.once_per_day) extras.push("1×/Tag");
+      if (r.auto_off) extras.push("Auto-Aus");
+      const extStr = extras.length ? ` • ${extras.join(", ")}` : "";
+      meta.textContent = `${this._describeTrigger(r)} → ${r.target_entity}${extStr}`;
+      info.appendChild(title);
+      info.appendChild(meta);
+
+      const ctrls = document.createElement("div");
+      ctrls.className = "rule-ctrls";
+
+      const togBtn = document.createElement("button");
+      togBtn.type = "button";
+      togBtn.className = "mini-btn";
+      togBtn.title = r.enabled === false ? "Aktivieren" : "Pausieren";
+      togBtn.textContent = r.enabled === false ? "⏸" : "✅";
+      togBtn.addEventListener("click", () => {
+        r.enabled = r.enabled === false ? true : false;
+        this._renderRulesList();
+      });
+
+      const upBtn = document.createElement("button");
+      upBtn.type = "button";
+      upBtn.className = "mini-btn";
+      upBtn.title = "Priorität erhöhen";
+      upBtn.disabled = idx === 0;
+      upBtn.textContent = "↑";
+      upBtn.addEventListener("click", () => this._moveRule(idx, -1));
+
+      const downBtn = document.createElement("button");
+      downBtn.type = "button";
+      downBtn.className = "mini-btn";
+      downBtn.title = "Priorität verringern";
+      downBtn.disabled = idx === this._rules.length - 1;
+      downBtn.textContent = "↓";
+      downBtn.addEventListener("click", () => this._moveRule(idx, 1));
+
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "mini-btn";
+      editBtn.title = "Bearbeiten";
+      editBtn.textContent = "✏️";
+      editBtn.addEventListener("click", () => this._startEditRule(idx));
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "mini-btn danger";
+      delBtn.title = "Löschen";
+      delBtn.textContent = "🗑️";
+      delBtn.addEventListener("click", () => this._deleteRule(idx));
+
+      ctrls.appendChild(togBtn);
+      ctrls.appendChild(upBtn);
+      ctrls.appendChild(downBtn);
+      ctrls.appendChild(editBtn);
+      ctrls.appendChild(delBtn);
+
+      card.appendChild(info);
+      card.appendChild(ctrls);
+      wrap.appendChild(card);
+    });
+  }
+
+  _renderTargetSelect() {
+    const sel = this.shadowRoot.getElementById("pvd-r-target");
+    if (!sel || !this._draft) return;
+    sel.innerHTML = "";
+
+    const allowed = this._allowedDomainsForAction(this._draft.action_type);
+    const q = this._targetSearch.trim().toLowerCase();
+    const filtered = this._targets.filter(
+      (t) =>
+        allowed.includes(t.domain) &&
+        (!q || t.name.toLowerCase().includes(q) || t.entity_id.toLowerCase().includes(q))
+    );
+
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = filtered.length
+      ? `— Ziel auswählen (${filtered.length} gefunden) —`
+      : "— Keine passende Entität gefunden —";
+    sel.appendChild(placeholder);
+
+    let hasCurrent = false;
+    filtered.forEach((t) => {
+      const opt = document.createElement("option");
+      opt.value = t.entity_id;
+      opt.textContent = `${t.name} (${t.entity_id})`;
+      if (t.entity_id === this._draft.target_entity) hasCurrent = true;
+      sel.appendChild(opt);
+    });
+
+    if (this._draft.target_entity && !hasCurrent) {
+      const curOpt = document.createElement("option");
+      curOpt.value = this._draft.target_entity;
+      curOpt.textContent = this._draft.target_entity;
+      sel.appendChild(curOpt);
+    }
+    sel.value = this._draft.target_entity || "";
+  }
+
+  _renderEditorFields() {
+    const d = this._draft;
+    if (!d) return;
+    this.shadowRoot.getElementById("pvd-ed-title").textContent =
+      this._editingIndex === -1 ? "➕ Neue PV-Aktion" : `✏️ Aktion bearbeiten: ${d.name}`;
+    this.shadowRoot.getElementById("pvd-r-name").value = d.name || "";
+    this.shadowRoot.getElementById("pvd-r-mode").value = d.trigger_mode || "either";
+    this.shadowRoot.getElementById("pvd-r-minw").value = String(d.min_surplus_w ?? 500);
+    this.shadowRoot.getElementById("pvd-r-minb").value = String(d.min_battery_soc ?? 80);
+    this.shadowRoot.getElementById("pvd-r-delayon").value = String(d.delay_on_minutes ?? 2);
+    this.shadowRoot.getElementById("pvd-r-action").value = d.action_type || "turn_on";
+    this.shadowRoot.getElementById("pvd-r-search").value = this._targetSearch;
+    this.shadowRoot.getElementById("pvd-r-once").checked = Boolean(d.once_per_day);
+    this.shadowRoot.getElementById("pvd-r-autooff").checked = Boolean(d.auto_off);
+    this.shadowRoot.getElementById("pvd-r-offw").value = String(d.off_surplus_w ?? 0);
+    this.shadowRoot.getElementById("pvd-r-offb").value = String(d.off_battery_soc ?? 70);
+    this.shadowRoot.getElementById("pvd-r-delayoff").value = String(d.delay_off_minutes ?? 5);
+
+    const showW = d.trigger_mode !== "battery";
+    const showB = d.trigger_mode !== "surplus";
+    this.shadowRoot.getElementById("pvd-f-minw").style.display = showW ? "flex" : "none";
+    this.shadowRoot.getElementById("pvd-f-minb").style.display = showB ? "flex" : "none";
+
+    const canAutoOff = d.action_type === "turn_on";
+    this.shadowRoot.getElementById("pvd-autooff-row").style.display = canAutoOff ? "flex" : "none";
+    this.shadowRoot.getElementById("pvd-autooff-box").style.display =
+      canAutoOff && d.auto_off ? "grid" : "none";
+    this.shadowRoot.getElementById("pvd-f-offw").style.display = showW ? "flex" : "none";
+    this.shadowRoot.getElementById("pvd-f-offb").style.display = showB ? "flex" : "none";
+
+    this._renderTargetSelect();
+  }
+
+  _renderBody() {
+    const loadingEl = this.shadowRoot.getElementById("pvd-loading");
+    const mainEl = this.shadowRoot.getElementById("pvd-main");
+    const editorEl = this.shadowRoot.getElementById("pvd-editor");
+
+    if (loadingEl) loadingEl.style.display = this._loading ? "block" : "none";
+    if (!this._loading) {
+      const isEditing = this._editingIndex !== null && this._draft !== null;
+      if (mainEl) mainEl.style.display = isEditing ? "none" : "block";
+      if (editorEl) editorEl.style.display = isEditing ? "block" : "none";
+
+      if (isEditing) {
+        this._renderEditorFields();
+      } else {
+        this._renderSensorSelects();
+        this._renderRulesList();
+      }
+    }
+    this._updateFooter();
+  }
+
+  _updateFooter() {
+    const statusEl = this.shadowRoot.getElementById("pvd-status");
+    const saveBtn = this.shadowRoot.getElementById("pvd-save");
+    if (statusEl) {
+      if (this._error) {
+        statusEl.textContent = this._error;
+        statusEl.className = "dlg-status error";
+        statusEl.style.display = "block";
+      } else if (this._savedMsg) {
+        statusEl.textContent = this._savedMsg;
+        statusEl.className = "dlg-status ok";
+        statusEl.style.display = "block";
+      } else {
+        statusEl.style.display = "none";
+      }
+    }
+    if (saveBtn) {
+      saveBtn.disabled = this._loading || this._saving;
+      saveBtn.textContent = this._saving ? "Speichert…" : "Speichern";
+    }
+  }
+
+  _renderShell() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host { display: none; font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif); }
+        dialog#pvd-native { padding: 0; border: none; background: transparent; max-width: min(560px, calc(100vw - 24px)); width: 100%; max-height: 90vh; overflow: visible; color: var(--primary-text-color, #e1e1e1); }
+        dialog#pvd-native::backdrop { background: rgba(0, 0, 0, 0.62); }
+        .modal { width: 100%; max-height: 90vh; background: var(--card-background-color, #1c1c1c); color: var(--primary-text-color, #e1e1e1); border-radius: 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); border: 1px solid var(--divider-color, rgba(255,255,255,0.12)); display: flex; flex-direction: column; overflow: hidden; }
+        .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 18px; border-bottom: 1px solid var(--divider-color); }
+        .modal-title { font-size: 16px; font-weight: 600; }
+        .close-btn { background: none; border: none; color: var(--secondary-text-color); font-size: 18px; cursor: pointer; padding: 4px 8px; border-radius: 8px; }
+        .modal-body { padding: 14px 18px; overflow-y: auto; flex: 1; }
+        .dlg-loading { text-align: center; padding: 28px 8px; color: var(--secondary-text-color); font-size: 13px; }
+        .box { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--divider-color); background: var(--secondary-background-color, rgba(255,255,255,0.03)); margin-bottom: 14px; }
+        .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+        .section-label { font-size: 13px; font-weight: 600; }
+        .section-count { font-size: 11px; color: var(--primary-color, #03a9f4); font-weight: 600; }
+        .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+        .field label { font-size: 11px; color: var(--secondary-text-color); font-weight: 600; }
+        .field input, .field select { padding: 7px 9px; border-radius: 8px; border: 1px solid var(--divider-color); background: var(--card-background-color, #1c1c1c); color: var(--primary-text-color); font-family: inherit; font-size: 13px; width: 100%; box-sizing: border-box; }
+        .inline-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border-radius: 8px; background: var(--secondary-background-color); margin-bottom: 8px; }
+        .inline-row label { font-size: 12px; cursor: pointer; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+        .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+        .preset-btn { border: 1px solid var(--divider-color); background: var(--secondary-background-color); color: var(--primary-text-color); border-radius: 999px; padding: 5px 10px; font-family: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+        .preset-btn:hover { border-color: var(--primary-color); color: var(--primary-color); }
+        .preset-btn.add { background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.14); border-color: rgba(var(--rgb-primary-color, 3, 169, 244), 0.45); color: var(--primary-color, #03a9f4); }
+        .rules-list { display: flex; flex-direction: column; gap: 6px; }
+        .rule-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--divider-color); background: var(--secondary-background-color); }
+        .rule-item.disabled { opacity: 0.55; }
+        .rule-info { min-width: 0; flex: 1; }
+        .rule-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .rule-meta { font-size: 11px; color: var(--secondary-text-color); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .rule-ctrls { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+        .mini-btn { background: var(--card-background-color); border: 1px solid var(--divider-color); color: var(--primary-text-color); border-radius: 6px; width: 26px; height: 26px; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+        .mini-btn:hover:not(:disabled) { border-color: var(--primary-color); }
+        .mini-btn.danger:hover { border-color: var(--error-color, #db4437); color: var(--error-color, #db4437); }
+        .mini-btn:disabled { opacity: 0.35; cursor: default; }
+        .dlg-empty { font-size: 12px; color: var(--secondary-text-color); text-align: center; padding: 14px 6px; }
+        .ed-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+        .ed-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+        .dlg-status { display: none; margin: 0 18px 10px; padding: 8px 10px; border-radius: 8px; font-size: 12px; }
+        .dlg-status.ok { color: var(--success-color, #4caf50); background: rgba(76, 175, 80, 0.14); }
+        .dlg-status.error { color: var(--error-color, #db4437); background: rgba(219, 68, 55, 0.14); }
+        .modal-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--divider-color); }
+        .foot-link { font-size: 12px; color: var(--primary-color, #03a9f4); text-decoration: none; }
+        .foot-btns { display: flex; gap: 8px; }
+        .btn { border: none; border-radius: 8px; padding: 8px 14px; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+        .btn.secondary { background: var(--secondary-background-color); color: var(--primary-text-color); }
+        .btn.primary { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
+        .btn:disabled { opacity: 0.55; cursor: default; }
+      </style>
+      <dialog id="pvd-native">
+        <div class="modal" role="document">
+          <div class="modal-head">
+            <div class="modal-title">☀️ PV-Überschuss konfigurieren</div>
+            <button id="pvd-close" class="close-btn" type="button" aria-label="Schließen">✕</button>
+          </div>
+
+          <div class="modal-body">
+            <div id="pvd-loading" class="dlg-loading">Lade PV-Sensoren & steuerbare Geräte…</div>
+
+            <div id="pvd-main" style="display:none;">
+              <div class="box">
+                <div class="section-head" style="margin-bottom:6px;">
+                  <span class="section-label">1. PV-Sensoren</span>
+                </div>
+                <div class="field">
+                  <label for="pvd-surplus">PV-Überschuss / Netzeinspeise-Sensor (W oder kW)</label>
+                  <select id="pvd-surplus"></select>
+                </div>
+                <div class="inline-row">
+                  <label for="pvd-invert">Negativer Wert = Überschuss (z. B. Netzzähler: -2500 W = Einspeisung)</label>
+                  <input id="pvd-invert" type="checkbox" />
+                </div>
+                <div class="field" style="margin-bottom:0;">
+                  <label for="pvd-battery">PV-Akku Ladestand-Sensor (%, optional)</label>
+                  <select id="pvd-battery"></select>
+                </div>
+              </div>
+
+              <div class="section-head">
+                <span class="section-label">2. Aktionen (Priorität von oben nach unten)</span>
+                <span id="pvd-rules-count" class="section-count">0 konfiguriert</span>
+              </div>
+
+              <div class="presets">
+                <button id="pvd-add-custom" class="preset-btn add" type="button">➕ Neue Aktion</button>
+                <button id="pvd-add-socket" class="preset-btn" type="button">🔌 Werkzeug-Akku</button>
+                <button id="pvd-add-dish" class="preset-btn" type="button">🍽️ Geschirrspüler</button>
+                <button id="pvd-add-wallbox" class="preset-btn" type="button">🚗 Wallbox</button>
+              </div>
+
+              <div id="pvd-rules-list" class="rules-list"></div>
+            </div>
+
+            <div id="pvd-editor" style="display:none;">
+              <div class="ed-bar">
+                <span id="pvd-ed-title" class="section-label">Neue PV-Aktion</span>
+                <button id="pvd-ed-back" class="btn secondary" type="button" style="padding:5px 10px;font-size:12px;">← Zurück</button>
+              </div>
+
+              <div class="field">
+                <label for="pvd-r-name">Name der Aktion</label>
+                <input id="pvd-r-name" type="text" placeholder="z. B. Werkzeug-Akkus laden, Geschirrspüler, Wallbox" />
+              </div>
+
+              <div class="grid-2">
+                <div class="field">
+                  <label for="pvd-r-mode">Auslösebedingung</label>
+                  <select id="pvd-r-mode">
+                    <option value="either">Überschuss ODER PV-Akku</option>
+                    <option value="surplus">Nur PV-Überschuss (Watt)</option>
+                    <option value="battery">Nur PV-Akku (%)</option>
+                    <option value="both">Überschuss UND PV-Akku</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="pvd-r-delayon">Wolkenfilter (Min. stabil)</label>
+                  <input id="pvd-r-delayon" type="number" min="0" max="60" value="2" />
+                </div>
+              </div>
+
+              <div class="grid-2">
+                <div id="pvd-f-minw" class="field">
+                  <label for="pvd-r-minw">Ab PV-Überschuss (Watt)</label>
+                  <input id="pvd-r-minw" type="number" min="0" max="50000" step="50" value="500" />
+                </div>
+                <div id="pvd-f-minb" class="field">
+                  <label for="pvd-r-minb">Ab PV-Akku-Stand (%)</label>
+                  <input id="pvd-r-minb" type="number" min="1" max="100" value="80" />
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="pvd-r-action">Aktionstyp</label>
+                <select id="pvd-r-action">
+                  <option value="turn_on">Einschalten (Steckdose / Wallbox / Schalter)</option>
+                  <option value="press_button">Taste drücken (z. B. Geschirrspüler)</option>
+                  <option value="run_script">Skript ausführen</option>
+                  <option value="activate_scene">Szene aktivieren</option>
+                  <option value="trigger_automation">Automation auslösen</option>
+                </select>
+              </div>
+
+              <div class="field">
+                <label for="pvd-r-target">Ziel-Entität suchen & wählen</label>
+                <input id="pvd-r-search" type="search" placeholder="Nach Gerät / Entität filtern…" style="margin-bottom:5px;" />
+                <select id="pvd-r-target"></select>
+              </div>
+
+              <div class="inline-row">
+                <label for="pvd-r-once">Nur 1× pro Tag ausführen (ideal für Geschirrspüler / Waschmaschine)</label>
+                <input id="pvd-r-once" type="checkbox" />
+              </div>
+
+              <div id="pvd-autooff-row" class="inline-row">
+                <label for="pvd-r-autooff">Automatisch wieder ausschalten, wenn Sonne/Akku sinkt</label>
+                <input id="pvd-r-autooff" type="checkbox" />
+              </div>
+
+              <div id="pvd-autooff-box" class="grid-3" style="display:none;">
+                <div id="pvd-f-offw" class="field">
+                  <label for="pvd-r-offw">Aus unter (W)</label>
+                  <input id="pvd-r-offw" type="number" min="-20000" max="50000" step="50" value="0" />
+                </div>
+                <div id="pvd-f-offb" class="field">
+                  <label for="pvd-r-offb">Aus unter (%)</label>
+                  <input id="pvd-r-offb" type="number" min="0" max="100" value="70" />
+                </div>
+                <div class="field">
+                  <label for="pvd-r-delayoff">Nachlauf (Min)</label>
+                  <input id="pvd-r-delayoff" type="number" min="0" max="60" value="5" />
+                </div>
+              </div>
+
+              <div class="ed-actions">
+                <button id="pvd-ed-cancel" class="btn secondary" type="button">Verwerfen</button>
+                <button id="pvd-ed-ok" class="btn primary" type="button">Aktion übernehmen</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="pvd-status" class="dlg-status"></div>
+
+          <div class="modal-foot">
+            <a id="pvd-ext-link" class="foot-link" href="/config/integrations/integration/wohnsinnig_vernetzt">Alle Optionen ↗</a>
+            <div class="foot-btns">
+              <button id="pvd-cancel" class="btn secondary" type="button">Abbrechen</button>
+              <button id="pvd-save" class="btn primary" type="button">Speichern</button>
+            </div>
+          </div>
+        </div>
+      </dialog>
+    `;
+
+    const nativeDlg = this.shadowRoot.getElementById("pvd-native");
+    nativeDlg.addEventListener("click", (ev) => {
+      if (ev.target === nativeDlg) this.close();
+    });
+    nativeDlg.addEventListener("close", () => {
+      this.style.display = "none";
+    });
+    this.shadowRoot.getElementById("pvd-close").addEventListener("click", () => this.close());
+    this.shadowRoot.getElementById("pvd-cancel").addEventListener("click", () => this.close());
+    this.shadowRoot.getElementById("pvd-ext-link").addEventListener("click", () => this.close());
+    this.shadowRoot.getElementById("pvd-save").addEventListener("click", () => this._saveConfig());
+
+    // Global sensor bindings
+    this.shadowRoot.getElementById("pvd-surplus").addEventListener("change", (ev) => {
+      this._surplusEntity = ev.target.value || "";
+    });
+    this.shadowRoot.getElementById("pvd-battery").addEventListener("change", (ev) => {
+      this._batteryEntity = ev.target.value || "";
+    });
+    this.shadowRoot.getElementById("pvd-invert").addEventListener("change", (ev) => {
+      this._invertSurplus = Boolean(ev.target.checked);
+    });
+
+    // Presets & Add buttons
+    this.shadowRoot.getElementById("pvd-add-custom").addEventListener("click", () => this._startNewRule(""));
+    this.shadowRoot.getElementById("pvd-add-socket").addEventListener("click", () => this._startNewRule("socket"));
+    this.shadowRoot.getElementById("pvd-add-dish").addEventListener("click", () => this._startNewRule("dishwasher"));
+    this.shadowRoot.getElementById("pvd-add-wallbox").addEventListener("click", () => this._startNewRule("wallbox"));
+
+    // Rule editor navigation & bindings
+    const closeEditor = () => {
+      this._editingIndex = null;
+      this._draft = null;
+      this._error = "";
+      this._renderBody();
+    };
+    this.shadowRoot.getElementById("pvd-ed-back").addEventListener("click", closeEditor);
+    this.shadowRoot.getElementById("pvd-ed-cancel").addEventListener("click", closeEditor);
+    this.shadowRoot.getElementById("pvd-ed-ok").addEventListener("click", () => this._commitDraft());
+
+    this.shadowRoot.getElementById("pvd-r-name").addEventListener("input", (ev) => {
+      if (this._draft) this._draft.name = ev.target.value;
+    });
+    this.shadowRoot.getElementById("pvd-r-mode").addEventListener("change", (ev) => {
+      if (this._draft) {
+        this._draft.trigger_mode = ev.target.value;
+        this._renderEditorFields();
+      }
+    });
+    this.shadowRoot.getElementById("pvd-r-minw").addEventListener("change", (ev) => {
+      if (this._draft) this._draft.min_surplus_w = Math.max(0, parseInt(ev.target.value, 10) || 0);
+    });
+    this.shadowRoot.getElementById("pvd-r-minb").addEventListener("change", (ev) => {
+      if (this._draft) this._draft.min_battery_soc = Math.max(1, Math.min(100, parseInt(ev.target.value, 10) || 80));
+    });
+    this.shadowRoot.getElementById("pvd-r-delayon").addEventListener("change", (ev) => {
+      if (this._draft) this._draft.delay_on_minutes = Math.max(0, Math.min(60, parseInt(ev.target.value, 10) || 0));
+    });
+    this.shadowRoot.getElementById("pvd-r-action").addEventListener("change", (ev) => {
+      if (this._draft) {
+        this._draft.action_type = ev.target.value;
+        this._draft.target_entity = "";
+        this._renderEditorFields();
+      }
+    });
+    this.shadowRoot.getElementById("pvd-r-search").addEventListener("input", (ev) => {
+      this._targetSearch = ev.target.value || "";
+      this._renderTargetSelect();
+    });
+    this.shadowRoot.getElementById("pvd-r-target").addEventListener("change", (ev) => {
+      if (this._draft) this._draft.target_entity = ev.target.value || "";
+    });
+    this.shadowRoot.getElementById("pvd-r-once").addEventListener("change", (ev) => {
+      if (this._draft) this._draft.once_per_day = Boolean(ev.target.checked);
+    });
+    this.shadowRoot.getElementById("pvd-r-autooff").addEventListener("change", (ev) => {
+      if (this._draft) {
+        this._draft.auto_off = Boolean(ev.target.checked);
+        this._renderEditorFields();
+      }
+    });
+    this.shadowRoot.getElementById("pvd-r-offw").addEventListener("change", (ev) => {
+      if (this._draft) this._draft.off_surplus_w = parseInt(ev.target.value, 10) || 0;
+    });
+    this.shadowRoot.getElementById("pvd-r-offb").addEventListener("change", (ev) => {
+      if (this._draft) this._draft.off_battery_soc = Math.max(0, Math.min(100, parseInt(ev.target.value, 10) || 70));
+    });
+    this.shadowRoot.getElementById("pvd-r-delayoff").addEventListener("change", (ev) => {
+      if (this._draft) this._draft.delay_off_minutes = Math.max(0, Math.min(60, parseInt(ev.target.value, 10) || 0));
+    });
+  }
+}
+
+if (!customElements.get("wohnsinnig-vernetzt-pv-config-dialog")) {
+  customElements.define(
+    "wohnsinnig-vernetzt-pv-config-dialog",
+    WohnsinnigVernetztPvConfigDialog
+  );
+}
+
+window.__wvLastPvOpenTs = 0;
+window.__wvOpenPvConfigDialog = function (hass) {
+  const now = Date.now();
+  if (now - (window.__wvLastPvOpenTs || 0) < 1200) return;
+  const activeHass = hass || document.querySelector("home-assistant")?.hass;
+  if (!activeHass) return;
+  window.__wvLastPvOpenTs = now;
+  let dlg = document.getElementById("wv-pv-config-dialog");
+  if (!dlg) {
+    dlg = document.createElement("wohnsinnig-vernetzt-pv-config-dialog");
+    dlg.id = "wv-pv-config-dialog";
+    document.body.appendChild(dlg);
+  }
+  dlg.open(activeHass);
+};
+
+// Doppelte Event- & State-Bridge für Anwesenheitssimulation, Wake-Up Light UND PV-Überschuss
+if (!window.__wvConfigBridgeV4Initialized) {
+  window.__wvConfigBridgeV4Initialized = true;
   let subscribedConn = null;
   const seenReqBySection = {};
   const seenStateTsBySection = {};
@@ -3966,6 +5056,8 @@ if (!window.__wvConfigBridgeV3Initialized) {
       window.__wvOpenPresenceConfigDialog(hass);
     } else if (section === "wakeup") {
       window.__wvOpenWakeUpConfigDialog(hass);
+    } else if (section === "pv") {
+      window.__wvOpenPvConfigDialog(hass);
     }
   };
 

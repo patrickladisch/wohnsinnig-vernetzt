@@ -12,6 +12,7 @@ from .const import (
     DEVICE_SECTION_BLUEPRINTS,
     DEVICE_SECTION_CHECKS,
     DEVICE_SECTION_PRESENCE,
+    DEVICE_SECTION_PV,
     DEVICE_SECTION_WAKEUP,
     DOMAIN,
     EVENT_OPEN_CONFIG,
@@ -35,6 +36,10 @@ async def async_setup_entry(
             WohnsinnigVernetztOpenWakeUpConfigButton(coordinator, entry.entry_id),
             WohnsinnigVernetztStartWakeUpButton(coordinator, entry.entry_id),
             WohnsinnigVernetztStopWakeUpButton(coordinator, entry.entry_id),
+            # PV-Überschuss
+            WohnsinnigVernetztOpenPvConfigButton(coordinator, entry.entry_id),
+            WohnsinnigVernetztEvaluatePvButton(coordinator, entry.entry_id),
+            WohnsinnigVernetztResetPvDailyButton(coordinator, entry.entry_id),
             # Blueprints
             WohnsinnigVernetztImportBlueprintButton(coordinator, entry.entry_id),
             WohnsinnigVernetztImportAllBlueprintsButton(coordinator, entry.entry_id),
@@ -264,3 +269,72 @@ class WohnsinnigVernetztStopWakeUpButton(WohnsinnigVernetztEntity, ButtonEntity)
 
     async def async_press(self) -> None:
         await self.coordinator.wakeup_manager.async_stop(cancelled=True)
+
+
+class WohnsinnigVernetztOpenPvConfigButton(WohnsinnigVernetztEntity, ButtonEntity):
+    """Öffnet direkt den PV-Überschuss-Dialog (Sensoren & beliebig viele Aktionen verwalten)."""
+
+    _device_section = DEVICE_SECTION_PV
+    _attr_name = "Konfiguration öffnen"
+    _attr_icon = "mdi:tune-variant"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "pv_open_config")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "wv_open_config": "pv",
+            "open_request_id": self.coordinator.pv_config_request_id,
+            "open_request_user": self.coordinator.pv_config_request_user,
+        }
+
+    async def async_press(self) -> None:
+        user_id = self._context.user_id if self._context else None
+        self.coordinator.pv_config_request_id += 1
+        self.coordinator.pv_config_request_user = user_id
+        self.async_write_ha_state()
+        self.hass.bus.async_fire(
+            EVENT_OPEN_CONFIG,
+            {
+                "section": "pv",
+                "entry_id": self._entry_id,
+                "request_id": self.coordinator.pv_config_request_id,
+                "user_id": user_id,
+            },
+        )
+
+
+class WohnsinnigVernetztEvaluatePvButton(WohnsinnigVernetztEntity, ButtonEntity):
+    """Prüft sofort alle PV-Überschuss-Bedingungen und Aktionen."""
+
+    _device_section = DEVICE_SECTION_PV
+    _attr_name = "Jetzt prüfen"
+    _attr_icon = "mdi:solar-power"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "pv_evaluate_now")
+
+    async def async_press(self) -> None:
+        await self.coordinator.pv_manager.async_evaluate()
+
+
+class WohnsinnigVernetztResetPvDailyButton(WohnsinnigVernetztEntity, ButtonEntity):
+    """Setzt die 1×-pro-Tag-Merker aller PV-Aktionen zurück (z. B. für Geschirrspüler)."""
+
+    _device_section = DEVICE_SECTION_PV
+    _attr_name = "Tageszähler zurücksetzen"
+    _attr_icon = "mdi:restore"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "pv_reset_daily")
+
+    async def async_press(self) -> None:
+        await self.coordinator.pv_manager.async_reset_daily_triggers()

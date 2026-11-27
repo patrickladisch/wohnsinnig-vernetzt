@@ -1,4 +1,4 @@
-"""Basis-Entität und 4-Bereiche-Gerätestruktur für Wohnsinnig vernetzt."""
+"""Basis-Entität und 6-Bereiche-Gerätestruktur für Wohnsinnig vernetzt."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from .const import (
     DEVICE_SECTION_BLUEPRINTS,
     DEVICE_SECTION_CHECKS,
     DEVICE_SECTION_PRESENCE,
+    DEVICE_SECTION_PV,
     DEVICE_SECTION_WAKEUP,
     DOMAIN,
 )
@@ -44,6 +45,11 @@ SECTION_DEVICE_SPECS: dict[str, dict[str, str]] = {
     DEVICE_SECTION_WAKEUP: {
         "name": "Wohnsinnig vernetzt – Wake-Up Light",
         "model": "Sonnenaufgang & Wake-Up Light",
+        "config_url": DEVICE_INTEGRATION_CONFIG_URL,
+    },
+    DEVICE_SECTION_PV: {
+        "name": "Wohnsinnig vernetzt – PV-Überschuss",
+        "model": "PV-Überschuss & Solar-Manager",
         "config_url": DEVICE_INTEGRATION_CONFIG_URL,
     },
 }

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -11,6 +12,7 @@ from .const import (
     DEVICE_SECTION_BLUEPRINTS,
     DEVICE_SECTION_CHECKS,
     DEVICE_SECTION_PRESENCE,
+    DEVICE_SECTION_PV,
     DEVICE_SECTION_WAKEUP,
     DOMAIN,
 )
@@ -36,6 +38,9 @@ async def async_setup_entry(
             WohnsinnigVernetztSilentSensorsSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztPresenceStatusSensor(coordinator, entry.entry_id),
             WohnsinnigVernetztWakeUpStatusSensor(coordinator, entry.entry_id),
+            WohnsinnigVernetztPvStatusSensor(coordinator, entry.entry_id),
+            WohnsinnigVernetztPvSurplusPowerSensor(coordinator, entry.entry_id),
+            WohnsinnigVernetztPvBatterySocSensor(coordinator, entry.entry_id),
         ]
     )
 
@@ -433,3 +438,88 @@ class WohnsinnigVernetztWakeUpStatusSensor(WohnsinnigVernetztEntity, SensorEntit
             "sonnenaufgang_farbe": snap["sunrise_color"],
             "letzter_durchlauf": snap["last_run"],
         }
+
+
+class WohnsinnigVernetztPvStatusSensor(WohnsinnigVernetztEntity, SensorEntity):
+    """Zeigt Status, aktive Aktionen und Details des PV-Überschuss-Managers."""
+
+    _device_section = DEVICE_SECTION_PV
+    _attr_name = "Status"
+    _unrecorded_attributes = frozenset({"aktionen", "rules_status"})
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "pv_surplus_status")
+
+    @property
+    def native_value(self) -> str:
+        return self.coordinator.pv_manager.get_status_snapshot()["status"]
+
+    @property
+    def icon(self) -> str:
+        pm = self.coordinator.pv_manager
+        if pm.enabled and pm.active_rule_ids:
+            return "mdi:solar-power"
+        return (
+            "mdi:solar-power-variant"
+            if pm.enabled
+            else "mdi:solar-power-variant-outline"
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        snap = self.coordinator.pv_manager.get_status_snapshot()
+        return {
+            "aktiv": snap["enabled"],
+            "ueberschuss_sensor": snap["surplus_entity"],
+            "akku_sensor": snap["battery_entity"],
+            "ueberschuss_invertiert": snap["invert_surplus"],
+            "ueberschuss_w": snap["surplus_w"],
+            "akku_prozent": snap["battery_soc"],
+            "aktionen_anzahl": snap["rules_count"],
+            "aktive_aktionen": snap["active_count"],
+            "aktionen": snap["rules_summary"],
+            "rules_status": snap["rules_status"],
+            "letztes_ereignis": snap["last_event"],
+        }
+
+
+class WohnsinnigVernetztPvSurplusPowerSensor(WohnsinnigVernetztEntity, SensorEntity):
+    """Zeigt den normierten PV-Überschuss in Watt (inkl. ggf. Invertierung)."""
+
+    _device_section = DEVICE_SECTION_PV
+    _attr_name = "Aktueller Überschuss"
+    _attr_icon = "mdi:transmission-tower-export"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "pv_surplus_power")
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.pv_manager.get_current_surplus_w()
+
+
+class WohnsinnigVernetztPvBatterySocSensor(WohnsinnigVernetztEntity, SensorEntity):
+    """Zeigt den aktuellen Ladestand des verknüpften PV-Akkus in Prozent."""
+
+    _device_section = DEVICE_SECTION_PV
+    _attr_name = "PV-Akku"
+    _attr_icon = "mdi:battery-charging-80"
+    _attr_device_class = SensorDeviceClass.BATTERY
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = PERCENTAGE
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "pv_battery_soc")
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.pv_manager.get_current_battery_soc()

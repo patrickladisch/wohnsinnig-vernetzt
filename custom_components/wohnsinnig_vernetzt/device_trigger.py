@@ -32,7 +32,7 @@ async def async_get_triggers(
     if device is not None:
         is_sub_device = any(
             domain == DOMAIN
-            and ident.endswith(("_presence", "_blueprints", "_checks", "_wakeup"))
+            and ident.endswith(("_presence", "_blueprints", "_checks", "_wakeup", "_pv"))
             for domain, ident in device.identifiers
         )
         if is_sub_device:

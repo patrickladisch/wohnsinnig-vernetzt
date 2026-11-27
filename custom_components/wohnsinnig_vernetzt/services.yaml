@@ -114,3 +114,11 @@ start_wakeup_light:
 stop_wakeup_light:
   name: Wake-Up Light abbrechen
   description: Bricht ein laufendes Wake-Up Light sofort ab und aktiviert pausierte Automationen wieder.
+
+evaluate_pv_surplus:
+  name: PV-Überschuss jetzt prüfen
+  description: Bewertet sofort alle konfigurierten PV-Überschuss- und PV-Akku-Aktionen.
+
+reset_pv_daily_triggers:
+  name: PV-Tageszähler zurücksetzen
+  description: Setzt alle „Nur 1× pro Tag“-Merker der PV-Aktionen zurück, damit z. B. der Geschirrspüler erneut starten darf.

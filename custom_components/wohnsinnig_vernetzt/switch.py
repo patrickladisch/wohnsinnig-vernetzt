@@ -11,6 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import (
     DEVICE_SECTION_CHECKS,
     DEVICE_SECTION_PRESENCE,
+    DEVICE_SECTION_PV,
     DEVICE_SECTION_WAKEUP,
     DOMAIN,
 )
@@ -34,6 +35,7 @@ async def async_setup_entry(
             WohnsinnigVernetztWakeUpLightSwitch(coordinator, entry.entry_id),
             WohnsinnigVernetztWakeUpAutoPauseSwitch(coordinator, entry.entry_id),
             WohnsinnigVernetztWakeUpSunriseColorSwitch(coordinator, entry.entry_id),
+            WohnsinnigVernetztPvSurplusSwitch(coordinator, entry.entry_id),
         ]
     )
 
@@ -268,3 +270,45 @@ class WohnsinnigVernetztWakeUpSunriseColorSwitch(WohnsinnigVernetztEntity, Switc
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.coordinator.wakeup_manager.async_set_sunrise_color(False)
+
+
+class WohnsinnigVernetztPvSurplusSwitch(WohnsinnigVernetztEntity, SwitchEntity):
+    """HAUPTSCHALTER für die automatische PV-Überschuss-Steuerung."""
+
+    _device_section = DEVICE_SECTION_PV
+    _attr_name = "PV-Überschuss"
+
+    def __init__(
+        self, coordinator: WohnsinnigVernetztCoordinator, entry_id: str
+    ) -> None:
+        super().__init__(coordinator, entry_id, "pv_surplus_enabled")
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.pv_manager.enabled
+
+    @property
+    def icon(self) -> str:
+        return (
+            "mdi:solar-power-variant"
+            if self.coordinator.pv_manager.enabled
+            else "mdi:solar-power-variant-outline"
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        snap = self.coordinator.pv_manager.get_status_snapshot()
+        return {
+            "status": snap["status"],
+            "ueberschuss_w": snap["surplus_w"],
+            "akku_prozent": snap["battery_soc"],
+            "aktionen_anzahl": snap["rules_count"],
+            "aktive_aktionen": snap["active_count"],
+            "aktionen": snap["rules_summary"],
+        }
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self.coordinator.pv_manager.async_set_enabled(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self.coordinator.pv_manager.async_set_enabled(False)

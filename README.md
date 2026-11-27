@@ -2,7 +2,8 @@
 
 Die offizielle Smart-Home-Integration zum Podcast **Wohnsinnig vernetzt** (von Niels und Patrick – [wohnsinnigvernetzt.de](https://www.wohnsinnigvernetzt.de)).
 
-## Features (v2.8.0)
+## Features (v2.9.0)
+- **PV-Überschuss & Solar-Manager:** Führt bei PV-Überschuss (Watt) und/oder PV-Akku-Füllstand (%) beliebig viele konfigurierbare Aktionen aus (Steckdosen für Werkzeug-Akkus, Geschirrspüler, Wallbox, Skripte, Szenen) – inkl. Wolkenfilter, Hysterese, Auto-Aus und 1×-pro-Tag-Modus.
 - **Wake-Up Light (Sonnenaufgang 0 % → 100 %):** Wähle eine oder mehrere Lampen, verknüpfe direkt deinen **Handy-Wecker (Next Alarm Sensor)** oder definiere eine feste Zielzeit (100 % um) bzw. Startzeit sowie die Dimm-Dauer (z. B. 30 Min) und optional eine **Auto-Aus-Zeit** nach Erreichen von 100 %. Betroffene Lampen-Automationen werden während des Dimmens automatisch deaktiviert und danach wieder aktiviert.
 - **Anwesenheitssimulation (1:1 Verlauf von vor 2 Wochen ± 7 Min):** Wähle beliebige Lampen und Schalter aus und schalte die Simulation über den Hauptschalter (`switch.wohnsinnig_vernetzt_anwesenheitssimulation`) ein oder aus. Ein eigener rollierender 21-Tage-Verlauf sorgt dafür, dass die 14-Tage-Wiedergabe auch bei Standard-Recorder-Einstellungen (`purge_keep_days: 10`) zuverlässig funktioniert. Doppelter Bewegungsmelder-Schutz (Automations-Pause + Echtzeit-Zustandswächter) verhindert zuverlässig, dass Bewegungsmelder dazwischenfunken.
 - **Podcast-Player & Episodenliste:** Kompakte Dashboard-Karte (`custom:wohnsinnig-vernetzt-card`) zum direkten Anhören sowie eine native `media_player`-Entität für Lautsprecher im Haus.
@@ -21,16 +22,18 @@ Die offizielle Smart-Home-Integration zum Podcast **Wohnsinnig vernetzt** (von N
 
 ## Dashboard-Karten
 - Podcast-Player: `type: custom:wohnsinnig-vernetzt-card`
+- PV-Überschuss: `type: custom:wohnsinnig-vernetzt-pv-card`
 - Wake-Up Light: `type: custom:wohnsinnig-vernetzt-wakeup-card`
 - Anwesenheitssimulation: `type: custom:wohnsinnig-vernetzt-presence-card`
 - Blueprint-Manager: `type: custom:wohnsinnig-vernetzt-blueprints-card`
 - Batterie-Check: `type: custom:wohnsinnig-vernetzt-battery-card`
 - Stille Sensoren: `type: custom:wohnsinnig-vernetzt-silent-sensors-card`
 
-## Aufgeräumte 5-Bereiche-Struktur in Home Assistant
-Die Integration legt automatisch 5 übersichtliche Geräte an, damit Steuerung und Sensoren sauber getrennt bleiben:
+## Aufgeräumte 6-Bereiche-Struktur in Home Assistant
+Die Integration legt automatisch 6 übersichtliche Geräte an, damit Steuerung und Sensoren sauber getrennt bleiben:
 1. **Wohnsinnig vernetzt – Audio & Podcast** (Player, Episoden, Infografik, Push & Eilmeldungen)
 2. **Wohnsinnig vernetzt – Anwesenheitssimulation** (Hauptschalter, Status & direkter Button **Konfiguration öffnen**)
 3. **Wohnsinnig vernetzt – Blueprints** (Auswahl, 1-Klick-Import & native Updates)
 4. **Wohnsinnig vernetzt – Batterie- & Sensor-Check** (Batterie-Check mit Ausschlussliste + Stille Sensoren gemeinsam)
-5. **Wohnsinnig vernetzt – Wake-Up Light** (Hauptschalter, Zeitmodus, Uhrzeit, Dimm-Dauer, Start/Abbrechen & Direkt-Konfiguration)
+5. **Wohnsinnig vernetzt – Wake-Up Light** (Hauptschalter, Handy-Wecker, Zeitmodus, Uhrzeit, Dimm-Dauer, Auto-Aus & Direkt-Konfiguration)
+6. **Wohnsinnig vernetzt – PV-Überschuss** (Hauptschalter, Live-Überschuss & PV-Akku, unbegrenzte Aktionen mit Wolkenfilter & Direkt-Konfiguration)

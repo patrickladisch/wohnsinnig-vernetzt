@@ -56,6 +56,9 @@ from .const import (
     DEFAULT_WAKEUP_DURATION,
     DEFAULT_WAKEUP_MODE,
     DEFAULT_WAKEUP_SUNRISE_COLOR,
+    DEFAULT_PV_BATTERY_ENTITY,
+    DEFAULT_PV_INVERT_SURPLUS,
+    DEFAULT_PV_SURPLUS_ENTITY,
     DEFAULT_WAKEUP_TIME,
     DOMAIN,
     EVENT_ALERT_RECEIVED,
@@ -88,6 +91,11 @@ from .wakeup_light import (
     normalize_wakeup_automations,
     normalize_wakeup_lights,
     parse_wakeup_time,
+)
+from .pv_surplus import (
+    PvSurplusManager,
+    normalize_pv_rules,
+    normalize_sensor_entity,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -302,6 +310,10 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         wakeup_auto_pause: bool = DEFAULT_WAKEUP_AUTO_PAUSE,
         wakeup_pause_automations: list[str] | None = None,
         wakeup_sunrise_color: bool = DEFAULT_WAKEUP_SUNRISE_COLOR,
+        pv_surplus_entity: str = DEFAULT_PV_SURPLUS_ENTITY,
+        pv_battery_entity: str = DEFAULT_PV_BATTERY_ENTITY,
+        pv_invert_surplus: bool = DEFAULT_PV_INVERT_SURPLUS,
+        pv_rules: list[dict] | None = None,
         default_target: str = BROWSER_TARGET,
     ) -> None:
         super().__init__(
@@ -389,6 +401,8 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
         self.presence_config_request_user: str | None = None
         self.wakeup_config_request_id: int = 0
         self.wakeup_config_request_user: str | None = None
+        self.pv_config_request_id: int = 0
+        self.pv_config_request_user: str | None = None
         self._persisted_presence_enabled: bool = False
         self._persisted_paused_automations: list[str] = []
         self.presence_manager = PresenceSimulationManager(
@@ -429,6 +443,19 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 wakeup_pause_automations
             ),
             sunrise_color=self._config_wakeup_sunrise_color,
+        )
+
+        self._persisted_pv_enabled: bool = False
+        self._persisted_pv_triggered_today: dict[str, str] = {}
+        self._persisted_pv_active_rules: list[str] = []
+        self.pv_manager = PvSurplusManager(
+            hass=hass,
+            on_update=self.async_update_listeners,
+            on_persist=self._async_save_state,
+            surplus_entity=normalize_sensor_entity(pv_surplus_entity),
+            battery_entity=normalize_sensor_entity(pv_battery_entity),
+            invert_surplus=bool(pv_invert_surplus),
+            rules=normalize_pv_rules(pv_rules or []),
         )
         self._state_loaded: bool = False
 
@@ -559,6 +586,12 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 and stored.get("last_config_wakeup_sunrise_color") == self._config_wakeup_sunrise_color
             ):
                 self.wakeup_manager.sunrise_color = stored["wakeup_sunrise_color"]
+            if isinstance(stored.get("pv_enabled"), bool):
+                self._persisted_pv_enabled = stored["pv_enabled"]
+            if isinstance(stored.get("pv_triggered_today"), dict):
+                self._persisted_pv_triggered_today = dict(stored["pv_triggered_today"])
+            if isinstance(stored.get("pv_active_rules"), list):
+                self._persisted_pv_active_rules = [str(x) for x in stored["pv_active_rules"]]
 
         self._state_loaded = True
 
@@ -614,6 +647,9 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
                 "last_config_wakeup_auto_pause": self._config_wakeup_auto_pause,
                 "wakeup_sunrise_color": self.wakeup_manager.sunrise_color,
                 "last_config_wakeup_sunrise_color": self._config_wakeup_sunrise_color,
+                "pv_enabled": self.pv_manager.enabled,
+                "pv_triggered_today": dict(self.pv_manager.triggered_today),
+                "pv_active_rules": list(self.pv_manager.active_rule_ids),
             }
         )
 
@@ -653,6 +689,21 @@ class WohnsinnigVernetztCoordinator(DataUpdateCoordinator[dict]):
     async def async_shutdown_wakeup_light(self) -> None:
         """Beendet laufende Wake-Up-Light-Tasks & Timer sauber."""
         await self.wakeup_manager.async_shutdown()
+
+    async def async_init_pv_surplus(self) -> None:
+        """Initialisiert den PV-Überschuss-Manager inkl. Tageszähler & Listener."""
+        await self._async_load_state()
+        await self.pv_manager.async_initialize(
+            was_enabled=self._persisted_pv_enabled,
+            persisted_triggered_today=self._persisted_pv_triggered_today,
+            persisted_active_rule_ids=self._persisted_pv_active_rules,
+        )
+        await self._async_save_state()
+        self.async_update_listeners()
+
+    async def async_shutdown_pv_surplus(self) -> None:
+        """Beendet PV-Listener und Timer sauber."""
+        await self.pv_manager.async_shutdown()
 
     def get_battery_reset_threshold(self) -> int:
         """Ab diesem Prozentwert gilt eine Batterie als gewechselt (Anti-Spam-Hysterese)."""

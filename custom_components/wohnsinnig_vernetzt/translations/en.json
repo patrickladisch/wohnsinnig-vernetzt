@@ -25,6 +25,7 @@
         "title": "Configure Wohnsinnig vernetzt",
         "description": "Choose the section you want to configure.",
         "menu_options": {
+          "pv": "☀️ PV Surplus (Sensors & Actions)",
           "wakeup": "🌅 Wake-Up Light (Lights, Phone Alarm, Duration & Automations)",
           "presence": "🏠 Presence Simulation (Lights, Switches & Motion Guard)",
           "monitoring": "🔋 Battery Check & Silent Sensors",
@@ -79,6 +80,46 @@
           "wakeup_sunrise_color": "Smooth sunrise color temperature (warm white → daylight)",
           "wakeup_alarm_entity": "📱 Phone Alarm (Next Alarm Sensor – optional)",
           "wakeup_auto_off_minutes": "Auto-off after reaching 100% brightness (minutes, 0 = disabled)"
+        }
+      },
+      "pv": {
+        "title": "Configure PV Surplus",
+        "description": "Select PV sensors or manage your solar surplus actions.",
+        "menu_options": {
+          "pv_sensors": "🔌 Set PV sensors (Surplus & PV Battery)",
+          "pv_add_rule": "➕ Add new PV action",
+          "pv_delete_rule": "🗑️ Delete PV action"
+        }
+      },
+      "pv_sensors": {
+        "title": "PV Sensors",
+        "data": {
+          "pv_surplus_entity": "PV surplus / grid export sensor (W or kW)",
+          "pv_invert_surplus": "Negative value = surplus (e.g. grid meter: -2500 W = export)",
+          "pv_battery_entity": "PV battery SoC sensor (%, optional)"
+        }
+      },
+      "pv_add_rule": {
+        "title": "Add PV Action",
+        "data": {
+          "name": "Action name",
+          "trigger_mode": "Trigger condition",
+          "min_surplus_w": "Minimum PV surplus (Watts)",
+          "min_battery_soc": "Minimum PV battery SoC (%)",
+          "delay_on_minutes": "Cloud filter / turn-on delay (minutes)",
+          "action_type": "Action type",
+          "target_entity": "Target entity",
+          "once_per_day": "Run only once per day",
+          "auto_off": "Automatically turn off again",
+          "off_surplus_w": "Turn-off surplus threshold (Watts)",
+          "off_battery_soc": "Turn-off battery threshold (%)",
+          "delay_off_minutes": "Turn-off cloud delay (minutes)"
+        }
+      },
+      "pv_delete_rule": {
+        "title": "Delete PV Action",
+        "data": {
+          "delete_ids": "Actions to remove"
         }
       }
     }
